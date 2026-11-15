@@ -68,6 +68,7 @@ class User(SQLModel, table=True):
 
     workouts: List["WorkoutSession"] = Relationship(back_populates="user")
     templates: List["WorkoutTemplate"] = Relationship(back_populates="user")
+    food_logs: List["FoodLog"] = Relationship(back_populates="user")
 
 
 class Exercise(SQLModel, table=True):
@@ -132,6 +133,19 @@ class TemplateSet(SQLModel, table=True):
     template: Optional[WorkoutTemplate] = Relationship(back_populates="sets")
 
 
+class FoodLog(SQLModel, table=True):
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: UUID = Field(foreign_key="user.id", index=True)
+    date: str = Field(index=True)  # YYYY-MM-DD format
+    food_name: str
+    calories: int
+    protein: Optional[float] = 0.0
+    carbs: Optional[float] = 0.0
+    fats: Optional[float] = 0.0
+
+    user: Optional[User] = Relationship(back_populates="food_logs")
+
+
 # --- 4. Token Authentication Dependency ---
 
 
@@ -184,7 +198,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Workout Tracker", lifespan=lifespan)
 
-# --- 6. Auth, Exercise, Template & Workout API Endpoints ---
+# --- 6. Auth, Exercise, Template, Workout & Nutrition API Endpoints ---
 
 
 class AuthPayload(SQLModel):
@@ -278,17 +292,13 @@ def get_exercise_history(
     if not clean_target:
         return []
 
-    # Find all set logs matching this exercise name for the current user, ordered by workout date desc
     sets = session.exec(
         select(SetLog, WorkoutSession)
         .join(WorkoutSession)
-        .where(
-            WorkoutSession.user_id == current_user.id,
-        )
+        .where(WorkoutSession.user_id == current_user.id)
         .order_by(WorkoutSession.date.desc())
     ).all()
 
-    # Group by workout session
     history_map = {}
     for set_log, workout in sets:
         if set_log.exercise_name.strip().lower() == clean_target:
@@ -307,13 +317,98 @@ def get_exercise_history(
                 "notes": set_log.notes
             })
 
-    # Sort each session's sets by set number
     results = []
     for w_data in history_map.values():
         w_data["sets"] = sorted(w_data["sets"], key=lambda x: x["set_number"])
         results.append(w_data)
 
     return results
+
+
+# --- Nutrition / Calorie Tracker Endpoints ---
+
+
+class FoodLogCreate(SQLModel):
+    date: str
+    food_name: str
+    calories: int
+    protein: Optional[float] = 0.0
+    carbs: Optional[float] = 0.0
+    fats: Optional[float] = 0.0
+
+
+@app.post("/api/nutrition", status_code=status.HTTP_201_CREATED)
+def log_food(
+    payload: FoodLogCreate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    food = FoodLog(
+        user_id=current_user.id,
+        date=payload.date,
+        food_name=payload.food_name.strip(),
+        calories=payload.calories,
+        protein=payload.protein,
+        carbs=payload.carbs,
+        fats=payload.fats,
+    )
+    session.add(food)
+    session.commit()
+    return {"status": "logged"}
+
+
+@app.get("/api/nutrition")
+def get_food_logs(
+    date: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    logs = session.exec(
+        select(FoodLog)
+        .where(FoodLog.user_id == current_user.id, FoodLog.date == date)
+    ).all()
+
+    total_calories = sum(l.calories for l in logs)
+    total_protein = sum(l.protein or 0 for l in logs)
+    total_carbs = sum(l.carbs or 0 for l in logs)
+    total_fats = sum(l.fats or 0 for l in logs)
+
+    return {
+        "date": date,
+        "totals": {
+            "calories": total_calories,
+            "protein": round(total_protein, 1),
+            "carbs": round(total_carbs, 1),
+            "fats": round(total_fats, 1),
+        },
+        "items": [
+            {
+                "id": str(item.id),
+                "food_name": item.food_name,
+                "calories": item.calories,
+                "protein": item.protein,
+                "carbs": item.carbs,
+                "fats": item.fats,
+            }
+            for item in logs
+        ],
+    }
+
+
+@app.delete("/api/nutrition/{food_id}")
+def delete_food_log(
+    food_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    item = session.exec(
+        select(FoodLog).where(FoodLog.id == food_id, FoodLog.user_id == current_user.id)
+    ).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Food item not found.")
+    session.delete(item)
+    session.commit()
+    return {"status": "deleted"}
 
 
 # --- Template Endpoints ---
@@ -533,7 +628,7 @@ def list_workouts(
     return results
 
 
-# --- 7. Web Interface with Exercise History Tab ---
+# --- 7. Web Interface with Nutrition & Calorie Tracker Tab ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -544,7 +639,7 @@ def serve_ui():
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Workout Tracker</title>
+      <title>Workout & Nutrition Tracker</title>
       <style>
         :root { --bg: #121212; --card: #1e1e1e; --accent: #2563eb; --green: #16a34a; --text: #f3f4f6; --muted: #9ca3af; --border: #333; }
         * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -557,8 +652,8 @@ def serve_ui():
         input, select, textarea, button { width: 100%; padding: 10px; margin-bottom: 8px; border-radius: 6px; border: 1px solid var(--border); background: #2a2a2a; color: var(--text); font-size: 15px; }
         button { background: var(--accent); color: white; border: none; font-weight: 600; cursor: pointer; }
         button:hover { opacity: 0.9; }
-        .tab-bar { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; background: var(--card); padding: 6px; border-radius: 10px; border: 1px solid var(--border); }
-        .tab-btn { margin: 0; padding: 8px 4px; font-size: 13px; background: transparent; color: var(--muted); border-radius: 7px; text-align: center; transition: background 0.15s, color 0.15s; }
+        .tab-bar { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 4px; background: var(--card); padding: 6px; border-radius: 10px; border: 1px solid var(--border); }
+        .tab-btn { margin: 0; padding: 8px 2px; font-size: 12px; background: transparent; color: var(--muted); border-radius: 7px; text-align: center; transition: background 0.15s, color 0.15s; }
         .tab-btn.active { background: var(--accent); color: white; }
         .template-bar { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; background: #262626; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid var(--border); }
         .template-bar select { margin: 0; font-size: 14px; padding: 8px; }
@@ -574,6 +669,10 @@ def serve_ui():
         .action-row button { margin: 0; }
         .history-item { border-bottom: 1px solid var(--border); padding: 12px 0; }
         .history-item:last-child { border: none; }
+        .macro-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; text-align: center; margin-bottom: 12px; }
+        .macro-box { background: #252525; padding: 8px; border-radius: 8px; border: 1px solid var(--border); }
+        .macro-val { font-size: 16px; font-weight: 700; color: var(--text); }
+        .macro-lbl { font-size: 11px; color: var(--muted); }
         .badge { font-size: 12px; background: #333; padding: 4px 8px; border-radius: 4px; color: var(--muted); }
         .hidden { display: none !important; }
       </style>
@@ -581,7 +680,7 @@ def serve_ui():
     <body>
       <div class="container">
         <div class="header-bar">
-          <h1>🏋️ Workout Logger</h1>
+          <h1>🏋️ Workout & Diet</h1>
           <div id="user-controls" class="hidden">
             <span id="user-badge" class="badge" style="margin-right:6px;"></span>
             <button class="btn-small" onclick="logout()">Log Out</button>
@@ -603,6 +702,7 @@ def serve_ui():
           <!-- Navigation Tabs -->
           <div class="tab-bar">
             <button type="button" id="tab-btn-log" class="tab-btn active" onclick="switchTab('log')">Log</button>
+            <button type="button" id="tab-btn-nutrition" class="tab-btn" onclick="switchTab('nutrition')">Nutrition</button>
             <button type="button" id="tab-btn-history" class="tab-btn" onclick="switchTab('history')">History <span id="history-count"></span></button>
             <button type="button" id="tab-btn-exercises" class="tab-btn" onclick="switchTab('exercises')">Exercises</button>
           </div>
@@ -656,13 +756,61 @@ def serve_ui():
             <button type="button" onclick="submitWorkout()">Finish & Save Workout</button>
           </div>
 
-          <!-- Tab 2: Past Workouts History -->
+          <!-- Tab 2: Nutrition & Calorie Tracker -->
+          <div id="tab-nutrition" class="card hidden">
+            <h2>Calorie & Macro Tracker</h2>
+            
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+              <input type="date" id="nutrition-date" style="margin:0; width:auto;" onchange="loadNutrition()">
+              <button type="button" class="btn-small" style="background:#374151;" onclick="openTDEECalculator()">🧮 Calorie Calculator</button>
+            </div>
+
+            <!-- Daily Totals Summary -->
+            <div class="macro-grid">
+              <div class="macro-box">
+                <div class="macro-val" id="tot-cal">0</div>
+                <div class="macro-lbl">Calories</div>
+              </div>
+              <div class="macro-box">
+                <div class="macro-val" id="tot-pro">0g</div>
+                <div class="macro-lbl">Protein</div>
+              </div>
+              <div class="macro-box">
+                <div class="macro-val" id="tot-carb">0g</div>
+                <div class="macro-lbl">Carbs</div>
+              </div>
+              <div class="macro-box">
+                <div class="macro-val" id="tot-fat">0g</div>
+                <div class="macro-lbl">Fats</div>
+              </div>
+            </div>
+
+            <!-- Quick Add Meal Form -->
+            <div style="background:#262626; padding:10px; border-radius:8px; border:1px solid var(--border); margin-bottom:12px;">
+              <h3 style="margin-bottom:8px; font-size:14px;">Log Food / Meal</h3>
+              <input type="text" id="food-name" placeholder="Food name (e.g. Chicken breast, Rice)" style="margin-bottom:6px;">
+              <div style="display:grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap:6px; margin-bottom:6px;">
+                <input type="number" id="food-cal" placeholder="Cals" style="margin:0;">
+                <input type="number" id="food-pro" placeholder="Pro (g)" step="0.5" style="margin:0;">
+                <input type="number" id="food-carb" placeholder="Carb (g)" step="0.5" style="margin:0;">
+                <input type="number" id="food-fat" placeholder="Fat (g)" step="0.5" style="margin:0;">
+              </div>
+              <button type="button" onclick="addFoodItem()" style="background:var(--green); margin:0;">+ Add to Daily Log</button>
+            </div>
+
+            <h3>Logged Items Today</h3>
+            <div id="nutrition-items-container">
+              <p style="color: var(--muted)">No food logged for this date.</p>
+            </div>
+          </div>
+
+          <!-- Tab 3: Past Workouts History -->
           <div id="tab-history" class="card hidden">
             <h2>Past Workouts</h2>
             <div id="history-container">Loading past workouts...</div>
           </div>
 
-          <!-- Tab 3: Exercise Performance History -->
+          <!-- Tab 4: Exercise Performance History -->
           <div id="tab-exercises" class="card hidden">
             <h2>Exercise Progress</h2>
             <div style="display:flex; gap:6px; margin-bottom:12px;">
@@ -684,21 +832,29 @@ def serve_ui():
 
         function switchTab(tabName) {
           const logView = document.getElementById('tab-log');
+          const nutView = document.getElementById('tab-nutrition');
           const historyView = document.getElementById('tab-history');
           const exercisesView = document.getElementById('tab-exercises');
           
           const logBtn = document.getElementById('tab-btn-log');
+          const nutBtn = document.getElementById('tab-btn-nutrition');
           const historyBtn = document.getElementById('tab-btn-history');
           const exercisesBtn = document.getElementById('tab-btn-exercises');
 
           logView.classList.add('hidden');
+          nutView.classList.add('hidden');
           historyView.classList.add('hidden');
           exercisesView.classList.add('hidden');
           logBtn.classList.remove('active');
+          nutBtn.classList.remove('active');
           historyBtn.classList.remove('active');
           exercisesBtn.classList.remove('active');
 
-          if (tabName === 'history') {
+          if (tabName === 'nutrition') {
+            nutView.classList.remove('hidden');
+            nutBtn.classList.add('active');
+            loadNutrition();
+          } else if (tabName === 'history') {
             historyView.classList.remove('hidden');
             historyBtn.classList.add('active');
             loadHistory();
@@ -709,6 +865,12 @@ def serve_ui():
             logView.classList.remove('hidden');
             logBtn.classList.add('active');
           }
+        }
+
+        function toLocalDateString(dateObj) {
+          const offset = dateObj.getTimezoneOffset();
+          const local = new Date(dateObj.getTime() - offset * 60000);
+          return local.toISOString().split('T')[0];
         }
 
         function toLocalDatetimeInput(dateObj) {
@@ -891,6 +1053,7 @@ def serve_ui():
           document.getElementById('user-badge').innerText = '@' + username;
 
           document.getElementById('start-time').value = toLocalDatetimeInput(new Date());
+          document.getElementById('nutrition-date').value = toLocalDateString(new Date());
           switchTab('log');
 
           await Promise.all([refreshExerciseOptions(), refreshTemplates()]);
@@ -1003,6 +1166,108 @@ def serve_ui():
             alert(err.detail || 'Failed to save workout');
           }
         }
+
+        // --- Nutrition Functions ---
+
+        async function loadNutrition() {
+          const dateStr = document.getElementById('nutrition-date').value;
+          if (!dateStr) return;
+
+          const res = await fetch(`/api/nutrition?date=${dateStr}`, { headers: getAuthHeaders() });
+          if (!res.ok) return;
+          const data = await res.json();
+
+          document.getElementById('tot-cal').innerText = data.totals.calories;
+          document.getElementById('tot-pro').innerText = data.totals.protein + 'g';
+          document.getElementById('tot-carb').innerText = data.totals.carbs + 'g';
+          document.getElementById('tot-fat').innerText = data.totals.fats + 'g';
+
+          const container = document.getElementById('nutrition-items-container');
+          if (data.items.length === 0) {
+            container.innerHTML = '<p style="color: var(--muted)">No food logged for this date.</p>';
+            return;
+          }
+
+          container.innerHTML = data.items.map(i => `
+            <div style="display:flex; justify-content:space-between; align-items:center; background:#252525; padding:8px 12px; border-radius:8px; margin-bottom:6px; border:1px solid var(--border);">
+              <div>
+                <strong>${i.food_name}</strong>
+                <div style="font-size:12px; color:var(--muted);">🔥 ${i.calories} cals | P: ${i.protein}g | C: ${i.carbs}g | F: ${i.fats}g</div>
+              </div>
+              <button class="btn-del" onclick="deleteFoodItem('${i.id}')" style="padding:6px 10px;">✕</button>
+            </div>
+          `).join('');
+        }
+
+        async function addFoodItem() {
+          const dateStr = document.getElementById('nutrition-date').value;
+          const foodName = document.getElementById('food-name').value.trim();
+          const calories = parseInt(document.getElementById('food-cal').value);
+          const protein = parseFloat(document.getElementById('food-pro').value) || 0;
+          const carbs = parseFloat(document.getElementById('food-carb').value) || 0;
+          const fats = parseFloat(document.getElementById('food-fat').value) || 0;
+
+          if (!foodName || isNaN(calories)) {
+            alert('Please enter a food name and calorie amount.');
+            return;
+          }
+
+          const res = await fetch('/api/nutrition', {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+              date: dateStr,
+              food_name: foodName,
+              calories: calories,
+              protein: protein,
+              carbs: carbs,
+              fats: fats
+            })
+          });
+
+          if (res.ok) {
+            document.getElementById('food-name').value = '';
+            document.getElementById('food-cal').value = '';
+            document.getElementById('food-pro').value = '';
+            document.getElementById('food-carb').value = '';
+            document.getElementById('food-fat').value = '';
+            loadNutrition();
+          } else {
+            alert('Failed to log food item.');
+          }
+        }
+
+        async function deleteFoodItem(id) {
+          const res = await fetch(`/api/nutrition/${id}`, {
+            method: 'DELETE',
+            headers: getAuthHeaders()
+          });
+          if (res.ok) {
+            loadNutrition();
+          } else {
+            alert('Failed to delete item.');
+          }
+        }
+
+        function openTDEECalculator() {
+          const weightLbs = prompt('Enter your body weight in lbs (e.g. 215):', '215');
+          if (!weightLbs) return;
+          const weightKg = parseFloat(weightLbs) / 2.20462;
+          
+          // BMR estimation using Mifflin-St Jeor rough athletic baseline
+          const bmr = (10 * weightKg) + (6.25 * 177) - (5 * 25) + 5; // assumes ~5'9" male baseline
+          const tdee = Math.round(bmr * 1.55); // Moderate exercise multiplier
+
+          const goal = prompt(`Estimated Maintenance (TDEE): ~${tdee} cals/day.\\n\\nSelect goal:\\n1. Bulk (+300 cals)\\n2. Cut (-500 cals)\\n3. Maintain`, '1');
+          
+          let target = tdee;
+          if (goal === '1') target += 300;
+          else if (goal === '2') target -= 500;
+
+          alert(`Recommended Daily Calorie Target: ${target} kcal\\nRecommended Daily Protein Target: ~${Math.round(parseFloat(weightLbs))}g`);
+        }
+
+        // --- History & Exercise Functions ---
 
         function formatTimeRange(w) {
           if (!w.started_at) return w.date;
