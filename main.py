@@ -67,6 +67,7 @@ class User(SQLModel, table=True):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     workouts: List["WorkoutSession"] = Relationship(back_populates="user")
+    templates: List["WorkoutTemplate"] = Relationship(back_populates="user")
 
 
 class Exercise(SQLModel, table=True):
@@ -103,6 +104,32 @@ class SetLog(SQLModel, table=True):
     notes: Optional[str] = None
 
     workout: Optional[WorkoutSession] = Relationship(back_populates="sets")
+
+
+class WorkoutTemplate(SQLModel, table=True):
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: UUID = Field(foreign_key="user.id", index=True)
+    name: str
+    notes: Optional[str] = None
+
+    user: Optional[User] = Relationship(back_populates="templates")
+    sets: List["TemplateSet"] = Relationship(
+        back_populates="template",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
+
+
+class TemplateSet(SQLModel, table=True):
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    template_id: UUID = Field(foreign_key="workouttemplate.id", index=True)
+    exercise_name: str
+    set_number: int
+    weight: Optional[float] = None
+    reps: Optional[int] = None
+    rpe: Optional[float] = None
+    notes: Optional[str] = None
+
+    template: Optional[WorkoutTemplate] = Relationship(back_populates="sets")
 
 
 # --- 4. Token Authentication Dependency ---
@@ -157,7 +184,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Workout Tracker", lifespan=lifespan)
 
-# --- 6. Auth & Workout API Endpoints ---
+# --- 6. Auth, Exercise, Template & Workout API Endpoints ---
 
 
 class AuthPayload(SQLModel):
@@ -220,15 +247,135 @@ def get_exercises(
         .distinct()
     ).all()
 
+    user_template_names = session.exec(
+        select(TemplateSet.exercise_name)
+        .join(WorkoutTemplate)
+        .where(WorkoutTemplate.user_id == current_user.id)
+        .distinct()
+    ).all()
+
     seen = set()
     combined = []
-    for name in default_names + list(user_logged_names):
+    for name in default_names + list(user_logged_names) + list(user_template_names):
         clean = name.strip()
         if clean and clean.lower() not in seen:
             seen.add(clean.lower())
             combined.append({"name": clean})
 
     return sorted(combined, key=lambda x: x["name"].lower())
+
+
+# --- Template Endpoints ---
+
+
+class TemplateSetInput(SQLModel):
+    exercise_name: str
+    set_number: int
+    weight: Optional[float] = None
+    reps: Optional[int] = None
+    rpe: Optional[float] = None
+    notes: Optional[str] = None
+
+
+class TemplateCreate(SQLModel):
+    name: str
+    notes: Optional[str] = None
+    sets: List[TemplateSetInput]
+
+
+@app.post("/api/templates", status_code=status.HTTP_201_CREATED)
+def create_template(
+    payload: TemplateCreate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    clean_name = payload.name.strip()
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Template name is required.")
+    if not payload.sets:
+        raise HTTPException(
+            status_code=400, detail="Add at least one exercise row to save a template."
+        )
+
+    template = WorkoutTemplate(
+        user_id=current_user.id,
+        name=clean_name,
+        notes=payload.notes.strip() if payload.notes else None,
+    )
+    session.add(template)
+    session.commit()
+    session.refresh(template)
+
+    for item in payload.sets:
+        session.add(
+            TemplateSet(
+                template_id=template.id,
+                exercise_name=item.exercise_name.strip(),
+                set_number=item.set_number,
+                weight=item.weight,
+                reps=item.reps,
+                rpe=item.rpe,
+                notes=item.notes.strip() if item.notes else None,
+            )
+        )
+
+    session.commit()
+    return {"status": "created", "template_id": str(template.id)}
+
+
+@app.get("/api/templates")
+def list_templates(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    templates = session.exec(
+        select(WorkoutTemplate)
+        .where(WorkoutTemplate.user_id == current_user.id)
+        .order_by(WorkoutTemplate.name.asc())
+    ).all()
+
+    return [
+        {
+            "id": str(t.id),
+            "name": t.name,
+            "notes": t.notes,
+            "sets": [
+                {
+                    "exercise_name": s.exercise_name,
+                    "set_number": s.set_number,
+                    "weight": s.weight,
+                    "reps": s.reps,
+                    "rpe": s.rpe,
+                    "notes": s.notes,
+                }
+                for s in sorted(t.sets, key=lambda x: x.set_number)
+            ],
+        }
+        for t in templates
+    ]
+
+
+@app.delete("/api/templates/{template_id}")
+def delete_template(
+    template_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    template = session.exec(
+        select(WorkoutTemplate).where(
+            WorkoutTemplate.id == template_id,
+            WorkoutTemplate.user_id == current_user.id,
+        )
+    ).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found.")
+
+    session.delete(template)
+    session.commit()
+    return {"status": "deleted"}
+
+
+# --- Workout Endpoints ---
 
 
 class SetInput(SQLModel):
@@ -328,14 +475,14 @@ def list_workouts(
                         "rpe": s.rpe,
                         "notes": s.notes,
                     }
-                    for s in w.sets
+                    for s in sorted(w.sets, key=lambda x: x.set_number)
                 ],
             }
         )
     return results
 
 
-# --- 7. Web Interface with Individual Set Notes, Custom Exercises & Timer ---
+# --- 7. Web Interface with Templates, Per-Set Notes, Custom Exercises & Timer ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -359,6 +506,8 @@ def serve_ui():
         input, select, textarea, button { width: 100%; padding: 10px; margin-bottom: 8px; border-radius: 6px; border: 1px solid var(--border); background: #2a2a2a; color: var(--text); font-size: 15px; }
         button { background: var(--accent); color: white; border: none; font-weight: 600; cursor: pointer; }
         button:hover { opacity: 0.9; }
+        .template-bar { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; background: #262626; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid var(--border); }
+        .template-bar select { margin: 0; font-size: 14px; padding: 8px; }
         .time-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
         .timer-bar { display: flex; justify-content: space-between; align-items: center; background: #262626; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid var(--border); }
         .set-card { background: #252525; border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-bottom: 10px; }
@@ -366,7 +515,9 @@ def serve_ui():
         .set-row input, .set-row select { margin: 0; }
         .set-note { margin: 0; padding: 7px 10px; font-size: 13px; background: #1e1e1e; }
         .btn-del { background: #dc2626; padding: 8px 12px; width: auto; margin: 0; }
-        .btn-small { width: auto; padding: 6px 12px; font-size: 13px; background: #374151; margin: 0; }
+        .btn-small { width: auto; padding: 8px 12px; font-size: 13px; background: #374151; margin: 0; white-space: nowrap; }
+        .action-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+        .action-row button { margin: 0; }
         .history-item { border-bottom: 1px solid var(--border); padding: 12px 0; }
         .history-item:last-child { border: none; }
         .badge { font-size: 12px; background: #333; padding: 4px 8px; border-radius: 4px; color: var(--muted); }
@@ -396,6 +547,15 @@ def serve_ui():
         <div id="app-screen" class="hidden" style="display:flex; flex-direction:column; gap:16px;">
           <div class="card">
             <h2>Log Session</h2>
+
+            <!-- Template Loader -->
+            <div class="template-bar">
+              <select id="template-select">
+                <option value="">-- Select a Workout Template --</option>
+              </select>
+              <button type="button" class="btn-small" style="background: var(--accent);" onclick="loadSelectedTemplate()">Load</button>
+              <button type="button" class="btn-del" title="Delete selected template" onclick="deleteSelectedTemplate()">✕</button>
+            </div>
             
             <!-- Live Session Timer -->
             <div class="timer-bar">
@@ -426,7 +586,10 @@ def serve_ui():
             <datalist id="exercise-options"></datalist>
             <div id="sets-container"></div>
             
-            <button type="button" onclick="addSetRow()" style="background: #374151; margin-bottom: 12px;">+ Add Set</button>
+            <div class="action-row">
+              <button type="button" onclick="addSetRow()" style="background: #374151;">+ Add Set</button>
+              <button type="button" onclick="saveAsTemplate()" style="background: #4b5563;">📋 Save as Template</button>
+            </div>
             <button type="button" onclick="submitWorkout()">Finish & Save Workout</button>
           </div>
 
@@ -439,6 +602,7 @@ def serve_ui():
 
       <script>
         let exerciseCatalog = [];
+        let savedTemplates = [];
         let timerInterval = null;
 
         function toLocalDatetimeInput(dateObj) {
@@ -513,6 +677,107 @@ def serve_ui():
           }
         }
 
+        async function refreshTemplates() {
+          const res = await fetch('/api/templates', { headers: getAuthHeaders() });
+          if (res.ok) {
+            savedTemplates = await res.json();
+            const select = document.getElementById('template-select');
+            select.innerHTML = '<option value="">-- Select a Workout Template --</option>' +
+              savedTemplates.map(t => `<option value="${t.id}">${t.name} (${t.sets.length} sets)</option>`).join('');
+          }
+        }
+
+        function loadSelectedTemplate() {
+          const templateId = document.getElementById('template-select').value;
+          if (!templateId) {
+            alert('Choose a template from the dropdown first.');
+            return;
+          }
+          const tpl = savedTemplates.find(t => t.id === templateId);
+          if (!tpl) return;
+
+          document.getElementById('workout-title').value = tpl.name;
+          document.getElementById('workout-notes').value = tpl.notes || '';
+          document.getElementById('sets-container').innerHTML = '';
+
+          if (tpl.sets.length === 0) {
+            addSetRow();
+          } else {
+            tpl.sets.forEach(s => addSetRow(s));
+          }
+        }
+
+        async function saveAsTemplate() {
+          const defaultName = document.getElementById('workout-title').value.trim() || 'My Routine';
+          const templateName = prompt('Name this workout template:', defaultName);
+          if (!templateName || !templateName.trim()) return;
+
+          const notes = document.getElementById('workout-notes').value.trim() || null;
+          const cards = document.querySelectorAll('.set-card');
+          const sets = [];
+
+          cards.forEach((c, idx) => {
+            const ex = c.querySelector('.set-ex').value.trim();
+            const lbsVal = c.querySelector('.set-lbs').value;
+            const repsVal = c.querySelector('.set-reps').value;
+            const rpeVal = c.querySelector('.set-rpe').value;
+            const setNote = c.querySelector('.set-note').value.trim() || null;
+
+            if (ex) {
+              sets.push({
+                exercise_name: ex,
+                set_number: idx + 1,
+                weight: lbsVal !== '' ? parseFloat(lbsVal) : null,
+                reps: repsVal !== '' ? parseInt(repsVal) : null,
+                rpe: rpeVal !== '' ? parseFloat(rpeVal) : null,
+                notes: setNote
+              });
+            }
+          });
+
+          if (sets.length === 0) {
+            alert('Enter at least one exercise name before saving a template.');
+            return;
+          }
+
+          const res = await fetch('/api/templates', {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+              name: templateName.trim(),
+              notes,
+              sets
+            })
+          });
+
+          if (res.ok) {
+            await refreshTemplates();
+            await refreshExerciseOptions();
+            alert(`Saved template "${templateName.trim()}"!`);
+          } else {
+            const err = await res.json();
+            alert(err.detail || 'Failed to save template.');
+          }
+        }
+
+        async function deleteSelectedTemplate() {
+          const templateId = document.getElementById('template-select').value;
+          if (!templateId) return;
+          const tpl = savedTemplates.find(t => t.id === templateId);
+          if (!confirm(`Delete template "${tpl ? tpl.name : 'selected'}"?`)) return;
+
+          const res = await fetch(`/api/templates/${templateId}`, {
+            method: 'DELETE',
+            headers: getAuthHeaders()
+          });
+
+          if (res.ok) {
+            await refreshTemplates();
+          } else {
+            alert('Failed to delete template.');
+          }
+        }
+
         async function showApp(username) {
           document.getElementById('auth-screen').classList.add('hidden');
           document.getElementById('app-screen').classList.remove('hidden');
@@ -521,7 +786,7 @@ def serve_ui():
 
           document.getElementById('start-time').value = toLocalDatetimeInput(new Date());
 
-          await refreshExerciseOptions();
+          await Promise.all([refreshExerciseOptions(), refreshTemplates()]);
           document.getElementById('sets-container').innerHTML = '';
           addSetRow();
           loadHistory();
@@ -539,19 +804,26 @@ def serve_ui():
           }
         }
 
-        function addSetRow() {
+        function addSetRow(prefill = {}) {
           const container = document.getElementById('sets-container');
           const card = document.createElement('div');
           card.className = 'set-card';
+
+          const exVal = prefill.exercise_name ? prefill.exercise_name.replace(/"/g, '&quot;') : '';
+          const lbsVal = prefill.weight !== null && prefill.weight !== undefined ? prefill.weight : '';
+          const repsVal = prefill.reps !== null && prefill.reps !== undefined ? prefill.reps : '';
+          const rpeVal = prefill.rpe !== null && prefill.rpe !== undefined ? prefill.rpe : '';
+          const noteVal = prefill.notes ? prefill.notes.replace(/"/g, '&quot;') : '';
+
           card.innerHTML = `
             <div class="set-row">
-              <input type="text" class="set-ex" list="exercise-options" placeholder="Exercise name...">
-              <input type="number" class="set-lbs" placeholder="lbs" step="2.5">
-              <input type="number" class="set-reps" placeholder="reps">
-              <input type="number" class="set-rpe" placeholder="RPE" step="0.5" min="1" max="10">
+              <input type="text" class="set-ex" list="exercise-options" placeholder="Exercise name..." value="${exVal}">
+              <input type="number" class="set-lbs" placeholder="lbs" step="2.5" value="${lbsVal}">
+              <input type="number" class="set-reps" placeholder="reps" value="${repsVal}">
+              <input type="number" class="set-rpe" placeholder="RPE" step="0.5" min="1" max="10" value="${rpeVal}">
               <button class="btn-del" onclick="this.closest('.set-card').remove()">✕</button>
             </div>
-            <input type="text" class="set-note" placeholder="Set note (e.g., paused reps, beltless, form cue...)">
+            <input type="text" class="set-note" placeholder="Set note (e.g., paused reps, beltless, form cue...)" value="${noteVal}">
           `;
           container.appendChild(card);
         }
