@@ -482,7 +482,7 @@ def list_workouts(
     return results
 
 
-# --- 7. Web Interface with Templates, Per-Set Notes, Custom Exercises & Timer ---
+# --- 7. Web Interface with Tab Navigation ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -506,6 +506,9 @@ def serve_ui():
         input, select, textarea, button { width: 100%; padding: 10px; margin-bottom: 8px; border-radius: 6px; border: 1px solid var(--border); background: #2a2a2a; color: var(--text); font-size: 15px; }
         button { background: var(--accent); color: white; border: none; font-weight: 600; cursor: pointer; }
         button:hover { opacity: 0.9; }
+        .tab-bar { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; background: var(--card); padding: 6px; border-radius: 10px; border: 1px solid var(--border); }
+        .tab-btn { margin: 0; padding: 10px; font-size: 14px; background: transparent; color: var(--muted); border-radius: 7px; transition: background 0.15s, color 0.15s; }
+        .tab-btn.active { background: var(--accent); color: white; }
         .template-bar { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; background: #262626; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid var(--border); }
         .template-bar select { margin: 0; font-size: 14px; padding: 8px; }
         .time-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
@@ -545,7 +548,15 @@ def serve_ui():
 
         <!-- Main App Screen -->
         <div id="app-screen" class="hidden" style="display:flex; flex-direction:column; gap:16px;">
-          <div class="card">
+          
+          <!-- Navigation Tabs -->
+          <div class="tab-bar">
+            <button type="button" id="tab-btn-log" class="tab-btn active" onclick="switchTab('log')">Log Session</button>
+            <button type="button" id="tab-btn-history" class="tab-btn" onclick="switchTab('history')">Past Workouts <span id="history-count"></span></button>
+          </div>
+
+          <!-- Tab 1: Active Workout Logger -->
+          <div id="tab-log" class="card">
             <h2>Log Session</h2>
 
             <!-- Template Loader -->
@@ -593,10 +604,12 @@ def serve_ui():
             <button type="button" onclick="submitWorkout()">Finish & Save Workout</button>
           </div>
 
-          <div class="card">
+          <!-- Tab 2: Past Workouts History -->
+          <div id="tab-history" class="card hidden">
             <h2>Past Workouts</h2>
             <div id="history-container">Loading past workouts...</div>
           </div>
+
         </div>
       </div>
 
@@ -604,6 +617,26 @@ def serve_ui():
         let exerciseCatalog = [];
         let savedTemplates = [];
         let timerInterval = null;
+
+        function switchTab(tabName) {
+          const logView = document.getElementById('tab-log');
+          const historyView = document.getElementById('tab-history');
+          const logBtn = document.getElementById('tab-btn-log');
+          const historyBtn = document.getElementById('tab-btn-history');
+
+          if (tabName === 'history') {
+            logView.classList.add('hidden');
+            historyView.classList.remove('hidden');
+            logBtn.classList.remove('active');
+            historyBtn.classList.add('active');
+            loadHistory();
+          } else {
+            historyView.classList.add('hidden');
+            logView.classList.remove('hidden');
+            historyBtn.classList.remove('active');
+            logBtn.classList.add('active');
+          }
+        }
 
         function toLocalDatetimeInput(dateObj) {
           const offset = dateObj.getTimezoneOffset();
@@ -785,6 +818,7 @@ def serve_ui():
           document.getElementById('user-badge').innerText = '@' + username;
 
           document.getElementById('start-time').value = toLocalDatetimeInput(new Date());
+          switchTab('log');
 
           await Promise.all([refreshExerciseOptions(), refreshTemplates()]);
           document.getElementById('sets-container').innerHTML = '';
@@ -890,6 +924,7 @@ def serve_ui():
             await refreshExerciseOptions();
             addSetRow();
             loadHistory();
+            alert('Workout saved!');
           } else {
             const err = await res.json();
             alert(err.detail || 'Failed to save workout');
@@ -911,6 +946,8 @@ def serve_ui():
           const res = await fetch('/api/workouts', { headers: getAuthHeaders() });
           const data = await res.json();
           const container = document.getElementById('history-container');
+          const countBadge = document.getElementById('history-count');
+          countBadge.innerText = data.length > 0 ? `(${data.length})` : '';
 
           if (data.length === 0) {
             container.innerHTML = '<p style="color: var(--muted)">No workouts logged yet.</p>';
