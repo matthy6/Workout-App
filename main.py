@@ -205,12 +205,29 @@ def get_me(current_user: User = Depends(get_current_user)):
     return {"id": str(current_user.id), "username": current_user.username}
 
 
-@app.get("/api/exercises", response_model=List[Exercise])
+@app.get("/api/exercises")
 def get_exercises(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    return session.exec(select(Exercise)).all()
+    default_names = [e.name for e in session.exec(select(Exercise)).all()]
+
+    user_logged_names = session.exec(
+        select(SetLog.exercise_name)
+        .join(WorkoutSession)
+        .where(WorkoutSession.user_id == current_user.id)
+        .distinct()
+    ).all()
+
+    seen = set()
+    combined = []
+    for name in default_names + list(user_logged_names):
+        clean = name.strip()
+        if clean and clean.lower() not in seen:
+            seen.add(clean.lower())
+            combined.append({"name": clean})
+
+    return sorted(combined, key=lambda x: x["name"].lower())
 
 
 class SetInput(SQLModel):
@@ -313,7 +330,7 @@ def list_workouts(
     return results
 
 
-# --- 7. Web Interface with Start/End Time & Live Timer ---
+# --- 7. Web Interface with Custom Exercises, Start/End Time & Auth ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -399,6 +416,7 @@ def serve_ui():
             <textarea id="workout-notes" placeholder="Session notes (optional)..." rows="2"></textarea>
 
             <h3>Sets</h3>
+            <datalist id="exercise-options"></datalist>
             <div id="sets-container"></div>
             
             <button type="button" onclick="addSetRow()" style="background: #374151; margin-bottom: 12px;">+ Add Set</button>
@@ -478,17 +496,25 @@ def serve_ui():
           document.getElementById('auth-screen').classList.remove('hidden');
         }
 
+        async function refreshExerciseOptions() {
+          const res = await fetch('/api/exercises', { headers: getAuthHeaders() });
+          if (res.ok) {
+            exerciseCatalog = await res.json();
+            document.getElementById('exercise-options').innerHTML = exerciseCatalog
+              .map(e => `<option value="${e.name}">`)
+              .join('');
+          }
+        }
+
         async function showApp(username) {
           document.getElementById('auth-screen').classList.add('hidden');
           document.getElementById('app-screen').classList.remove('hidden');
           document.getElementById('user-controls').classList.remove('hidden');
           document.getElementById('user-badge').innerText = '@' + username;
 
-          // Default Start Time to when the user opens the logger
           document.getElementById('start-time').value = toLocalDatetimeInput(new Date());
 
-          const res = await fetch('/api/exercises', { headers: getAuthHeaders() });
-          exerciseCatalog = await res.json();
+          await refreshExerciseOptions();
           document.getElementById('sets-container').innerHTML = '';
           addSetRow();
           loadHistory();
@@ -510,9 +536,8 @@ def serve_ui():
           const container = document.getElementById('sets-container');
           const row = document.createElement('div');
           row.className = 'set-row';
-          const exerciseSelect = exerciseCatalog.map(e => `<option value="${e.name}">${e.name}</option>`).join('');
           row.innerHTML = `
-            <select class="set-ex">${exerciseSelect}</select>
+            <input type="text" class="set-ex" list="exercise-options" placeholder="Exercise name...">
             <input type="number" class="set-lbs" placeholder="lbs" step="2.5">
             <input type="number" class="set-reps" placeholder="reps">
             <input type="number" class="set-rpe" placeholder="RPE" step="0.5" min="1" max="10">
@@ -534,17 +559,17 @@ def serve_ui():
           const sets = [];
 
           rows.forEach((r, idx) => {
-            const ex = r.querySelector('.set-ex').value;
+            const ex = r.querySelector('.set-ex').value.trim();
             const lbs = parseFloat(r.querySelector('.set-lbs').value) || 0;
             const reps = parseInt(r.querySelector('.set-reps').value) || 0;
             const rpe = parseFloat(r.querySelector('.set-rpe').value) || null;
-            if (reps > 0) {
+            if (ex && reps > 0) {
               sets.push({ exercise_name: ex, set_number: idx + 1, weight: lbs, reps: reps, rpe: rpe });
             }
           });
 
           if (sets.length === 0) {
-            alert('Please add at least one set with reps.');
+            alert('Please enter an exercise name and reps for at least one set.');
             return;
           }
 
@@ -571,6 +596,8 @@ def serve_ui():
             document.getElementById('workout-notes').value = '';
             document.getElementById('start-time').value = toLocalDatetimeInput(new Date());
             document.getElementById('end-time').value = '';
+            
+            await refreshExerciseOptions();
             addSetRow();
             loadHistory();
           } else {
