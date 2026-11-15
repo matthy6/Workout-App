@@ -69,6 +69,7 @@ class User(SQLModel, table=True):
     workouts: List["WorkoutSession"] = Relationship(back_populates="user")
     templates: List["WorkoutTemplate"] = Relationship(back_populates="user")
     food_logs: List["FoodLog"] = Relationship(back_populates="user")
+    saved_foods: List["FoodDatabase"] = Relationship(back_populates="user")
 
 
 class Exercise(SQLModel, table=True):
@@ -146,6 +147,20 @@ class FoodLog(SQLModel, table=True):
     fats: Optional[float] = 0.0
 
     user: Optional[User] = Relationship(back_populates="food_logs")
+
+
+class FoodDatabase(SQLModel, table=True):
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: UUID = Field(foreign_key="user.id", index=True)
+    food_name: str = Field(index=True)
+    default_unit: Optional[str] = None
+    # Macros stored per 1 unit (or per 100g/oz depending on input ratio)
+    calories_per_unit: float
+    protein_per_unit: float
+    carbs_per_unit: float
+    fats_per_unit: float
+
+    user: Optional[User] = Relationship(back_populates="saved_foods")
 
 
 # --- 4. Token Authentication Dependency ---
@@ -327,7 +342,7 @@ def get_exercise_history(
     return results
 
 
-# --- Nutrition / Calorie Tracker Endpoints ---
+# --- Nutrition / Calorie Tracker & Food Memory Endpoints ---
 
 
 class FoodLogCreate(SQLModel):
@@ -341,16 +356,42 @@ class FoodLogCreate(SQLModel):
     fats: Optional[float] = 0.0
 
 
+@app.get("/api/nutrition/foods")
+def get_saved_foods(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    foods = session.exec(
+        select(FoodDatabase)
+        .where(FoodDatabase.user_id == current_user.id)
+        .order_by(FoodDatabase.food_name.asc())
+    ).all()
+    return [
+        {
+            "food_name": f.food_name,
+            "unit": f.default_unit,
+            "calories_per_unit": f.calories_per_unit,
+            "protein_per_unit": f.protein_per_unit,
+            "carbs_per_unit": f.carbs_per_unit,
+            "fats_per_unit": f.fats_per_unit,
+        }
+        for f in foods
+    ]
+
+
 @app.post("/api/nutrition", status_code=status.HTTP_201_CREATED)
 def log_food(
     payload: FoodLogCreate,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
+    clean_name = payload.food_name.strip()
+    
+    # Save log entry
     food = FoodLog(
         user_id=current_user.id,
         date=payload.date,
-        food_name=payload.food_name.strip(),
+        food_name=clean_name,
         amount=payload.amount,
         unit=payload.unit.strip() if payload.unit else None,
         calories=payload.calories,
@@ -359,6 +400,41 @@ def log_food(
         fats=payload.fats,
     )
     session.add(food)
+
+    # Auto-update or create food memory profile if amount is provided (> 0)
+    if payload.amount and payload.amount > 0:
+        amt = payload.amount
+        existing_db = session.exec(
+            select(FoodDatabase).where(
+                FoodDatabase.user_id == current_user.id,
+                FoodDatabase.food_name.ilike(clean_name)
+            )
+        ).first()
+
+        c_per_u = payload.calories / amt
+        p_per_u = (payload.protein or 0) / amt
+        carb_per_u = (payload.carbs or 0) / amt
+        f_per_u = (payload.fats or 0) / amt
+
+        if existing_db:
+            existing_db.default_unit = payload.unit.strip() if payload.unit else existing_db.default_unit
+            existing_db.calories_per_unit = c_per_u
+            existing_db.protein_per_unit = p_per_u
+            existing_db.carbs_per_unit = carb_per_u
+            existing_db.fats_per_unit = f_per_u
+            session.add(existing_db)
+        else:
+            new_db = FoodDatabase(
+                user_id=current_user.id,
+                food_name=clean_name,
+                default_unit=payload.unit.strip() if payload.unit else None,
+                calories_per_unit=c_per_u,
+                protein_per_unit=p_per_u,
+                carbs_per_unit=carb_per_u,
+                fats_per_unit=f_per_u,
+            )
+            session.add(new_db)
+
     session.commit()
     return {"status": "logged"}
 
@@ -636,7 +712,7 @@ def list_workouts(
     return results
 
 
-# --- 7. Web Interface ---
+# --- 7. Web Interface with Auto-scaling Foods ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -796,11 +872,13 @@ def serve_ui():
             <!-- Quick Add Meal Form -->
             <div style="background:#262626; padding:10px; border-radius:8px; border:1px solid var(--border); margin-bottom:12px;">
               <h3 style="margin-bottom:8px; font-size:14px;">Log Food / Meal</h3>
-              <input type="text" id="food-name" placeholder="Food name (e.g. Chicken breast, Rice)" style="margin-bottom:6px;">
+              
+              <input type="text" id="food-name" list="food-catalog-options" placeholder="Food name (e.g. White Rice)" style="margin-bottom:6px;" oninput="onFoodNameInput()">
+              <datalist id="food-catalog-options"></datalist>
               
               <!-- Amount & Unit Datalist Row -->
               <div style="display:grid; grid-template-columns: 1fr 1fr; gap:6px; margin-bottom:6px;">
-                <input type="number" id="food-amount" placeholder="Amount (e.g. 150)" step="any" style="margin:0;">
+                <input type="number" id="food-amount" placeholder="Amount (e.g. 150)" step="any" style="margin:0;" oninput="onFoodAmountInput()">
                 <input type="text" id="food-unit" list="unit-options" placeholder="Unit (grams, oz, cups...)" style="margin:0;">
                 <datalist id="unit-options">
                   <option value="grams">
@@ -853,6 +931,7 @@ def serve_ui():
       <script>
         let exerciseCatalog = [];
         let savedTemplates = [];
+        let savedFoodsCatalog = [];
         let timerInterval = null;
 
         function switchTab(tabName) {
@@ -879,6 +958,7 @@ def serve_ui():
             nutView.classList.remove('hidden');
             nutBtn.classList.add('active');
             loadNutrition();
+            refreshSavedFoods();
           } else if (tabName === 'history') {
             historyView.classList.remove('hidden');
             historyBtn.classList.add('active');
@@ -968,6 +1048,51 @@ def serve_ui():
               .map(e => `<option value="${e.name}">`)
               .join('');
           }
+        }
+
+        async function refreshSavedFoods() {
+          const res = await fetch('/api/nutrition/foods', { headers: getAuthHeaders() });
+          if (res.ok) {
+            savedFoodsCatalog = await res.json();
+            document.getElementById('food-catalog-options').innerHTML = savedFoodsCatalog
+              .map(f => `<option value="${f.food_name}">`)
+              .join('');
+          }
+        }
+
+        function onFoodNameInput() {
+          const enteredName = document.getElementById('food-name').value.trim().toLowerCase();
+          const match = savedFoodsCatalog.find(f => f.food_name.toLowerCase() === enteredName);
+          if (match) {
+            if (match.unit) document.getElementById('food-unit').value = match.unit;
+            // Store per-unit rates temporarily on the element dataset for instant scaling
+            document.getElementById('food-name').dataset.calRate = match.calories_per_unit;
+            document.getElementById('food-name').dataset.proRate = match.protein_per_unit;
+            document.getElementById('food-name').dataset.carbRate = match.carbs_per_unit;
+            document.getElementById('food-name').dataset.fatRate = match.fats_per_unit;
+            
+            // If amount is already filled, recalculate immediately
+            onFoodAmountInput();
+          } else {
+            delete document.getElementById('food-name').dataset.calRate;
+          }
+        }
+
+        function onFoodAmountInput() {
+          const amount = parseFloat(document.getElementById('food-amount').value);
+          const nameInput = document.getElementById('food-name');
+          
+          if (isNaN(amount) || amount <= 0 || !nameInput.dataset.calRate) return;
+
+          const calRate = parseFloat(nameInput.dataset.calRate);
+          const proRate = parseFloat(nameInput.dataset.proRate);
+          const carbRate = parseFloat(nameInput.dataset.carbRate);
+          const fatRate = parseFloat(nameInput.dataset.fatRate);
+
+          document.getElementById('food-cal').value = Math.round(calRate * amount);
+          document.getElementById('food-pro').value = Math.round((proRate * amount) * 10) / 10;
+          document.getElementById('food-carb').value = Math.round((carbRate * amount) * 10) / 10;
+          document.getElementById('food-fat').value = Math.round((fatRate * amount) * 10) / 10;
         }
 
         async function refreshTemplates() {
@@ -1081,7 +1206,7 @@ def serve_ui():
           document.getElementById('nutrition-date').value = toLocalDateString(new Date());
           switchTab('log');
 
-          await Promise.all([refreshExerciseOptions(), refreshTemplates()]);
+          await Promise.all([refreshExerciseOptions(), refreshTemplates(), refreshSavedFoods()]);
           document.getElementById('sets-container').innerHTML = '';
           addSetRow();
           loadHistory();
@@ -1265,6 +1390,9 @@ def serve_ui():
             document.getElementById('food-pro').value = '';
             document.getElementById('food-carb').value = '';
             document.getElementById('food-fat').value = '';
+            delete document.getElementById('food-name').dataset.calRate;
+            
+            await refreshSavedFoods();
             loadNutrition();
           } else {
             alert('Failed to log food item.');
