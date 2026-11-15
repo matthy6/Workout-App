@@ -81,6 +81,8 @@ class WorkoutSession(SQLModel, table=True):
     user_id: UUID = Field(foreign_key="user.id", index=True)
     title: str
     date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
     notes: Optional[str] = None
 
     user: Optional[User] = Relationship(back_populates="workouts")
@@ -222,6 +224,8 @@ class SetInput(SQLModel):
 class WorkoutCreate(SQLModel):
     title: str
     notes: Optional[str] = None
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
     sets: List[SetInput]
 
 
@@ -231,9 +235,21 @@ def save_workout(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
+    now = datetime.now(timezone.utc)
+    end_time = payload.ended_at or now
+    start_time = payload.started_at or end_time
+
+    if end_time < start_time:
+        raise HTTPException(
+            status_code=400, detail="End time cannot be earlier than start time."
+        )
+
     workout = WorkoutSession(
         user_id=current_user.id,
         title=payload.title,
+        date=start_time,
+        started_at=start_time,
+        ended_at=end_time,
         notes=payload.notes,
     )
     session.add(workout)
@@ -266,28 +282,38 @@ def list_workouts(
         .where(WorkoutSession.user_id == current_user.id)
         .order_by(WorkoutSession.date.desc())
     ).all()
-    return [
-        {
-            "id": str(w.id),
-            "title": w.title,
-            "date": w.date.strftime("%Y-%m-%d %H:%M"),
-            "notes": w.notes,
-            "sets": [
-                {
-                    "exercise": s.exercise_name,
-                    "set": s.set_number,
-                    "weight": s.weight,
-                    "reps": s.reps,
-                    "rpe": s.rpe,
-                }
-                for s in w.sets
-            ],
-        }
-        for w in workouts
-    ]
+
+    results = []
+    for w in workouts:
+        duration_mins = None
+        if w.started_at and w.ended_at:
+            duration_mins = max(1, round((w.ended_at - w.started_at).total_seconds() / 60))
+
+        results.append(
+            {
+                "id": str(w.id),
+                "title": w.title,
+                "date": w.date.strftime("%Y-%m-%d"),
+                "started_at": w.started_at.isoformat() if w.started_at else None,
+                "ended_at": w.ended_at.isoformat() if w.ended_at else None,
+                "duration_mins": duration_mins,
+                "notes": w.notes,
+                "sets": [
+                    {
+                        "exercise": s.exercise_name,
+                        "set": s.set_number,
+                        "weight": s.weight,
+                        "reps": s.reps,
+                        "rpe": s.rpe,
+                    }
+                    for s in w.sets
+                ],
+            }
+        )
+    return results
 
 
-# --- 7. Web Interface with Built-In Login / Sign Up / Logout ---
+# --- 7. Web Interface with Start/End Time & Live Timer ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -300,24 +326,27 @@ def serve_ui():
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>Workout Tracker</title>
       <style>
-        :root { --bg: #121212; --card: #1e1e1e; --accent: #2563eb; --text: #f3f4f6; --muted: #9ca3af; --border: #333; }
+        :root { --bg: #121212; --card: #1e1e1e; --accent: #2563eb; --green: #16a34a; --text: #f3f4f6; --muted: #9ca3af; --border: #333; }
         * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
         body { background: var(--bg); color: var(--text); margin: 0; padding: 16px; display: flex; justify-content: center; }
         .container { width: 100%; max-width: 600px; display: flex; flex-direction: column; gap: 16px; }
         .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
         .header-bar { display: flex; justify-content: space-between; align-items: center; }
         h1, h2, h3 { margin: 0 0 12px 0; }
+        label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
         input, select, textarea, button { width: 100%; padding: 10px; margin-bottom: 8px; border-radius: 6px; border: 1px solid var(--border); background: #2a2a2a; color: var(--text); font-size: 15px; }
         button { background: var(--accent); color: white; border: none; font-weight: 600; cursor: pointer; }
         button:hover { opacity: 0.9; }
+        .time-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+        .timer-bar { display: flex; justify-content: space-between; align-items: center; background: #262626; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid var(--border); }
         .set-row { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; gap: 6px; align-items: center; margin-bottom: 8px; }
         .set-row input, .set-row select { margin: 0; }
         .btn-del { background: #dc2626; padding: 8px 12px; width: auto; }
-        .btn-small { width: auto; padding: 6px 12px; font-size: 13px; background: #374151; }
+        .btn-small { width: auto; padding: 6px 12px; font-size: 13px; background: #374151; margin: 0; }
         .history-item { border-bottom: 1px solid var(--border); padding: 12px 0; }
         .history-item:last-child { border: none; }
         .badge { font-size: 12px; background: #333; padding: 4px 8px; border-radius: 4px; color: var(--muted); }
-        .hidden { display: none; }
+        .hidden { display: none !important; }
       </style>
     </head>
     <body>
@@ -339,18 +368,41 @@ def serve_ui():
           <button onclick="handleAuth('/api/register')" style="background: #374151;">Create New Account</button>
         </div>
 
-        <!-- Main App Screen (Hidden until logged in) -->
+        <!-- Main App Screen -->
         <div id="app-screen" class="hidden" style="display:flex; flex-direction:column; gap:16px;">
           <div class="card">
             <h2>Log Session</h2>
+            
+            <!-- Live Session Timer -->
+            <div class="timer-bar">
+              <div>
+                <span style="font-size: 12px; color: var(--muted);">Session Timer</span>
+                <div id="live-timer" style="font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums;">00:00:00</div>
+              </div>
+              <button type="button" id="start-btn" class="btn-small" style="background: var(--green);" onclick="startSession()">▶ Start Now</button>
+            </div>
+
             <input type="text" id="workout-title" placeholder="Workout Title (e.g. Leg Day, Push Day)" value="Workout Session">
+            
+            <!-- Start & End Time Inputs -->
+            <div class="time-grid">
+              <div>
+                <label for="start-time">Start Time</label>
+                <input type="datetime-local" id="start-time">
+              </div>
+              <div>
+                <label for="end-time">End Time (blank = now)</label>
+                <input type="datetime-local" id="end-time">
+              </div>
+            </div>
+
             <textarea id="workout-notes" placeholder="Session notes (optional)..." rows="2"></textarea>
 
             <h3>Sets</h3>
             <div id="sets-container"></div>
             
             <button type="button" onclick="addSetRow()" style="background: #374151; margin-bottom: 12px;">+ Add Set</button>
-            <button type="button" onclick="submitWorkout()">Save Workout</button>
+            <button type="button" onclick="submitWorkout()">Finish & Save Workout</button>
           </div>
 
           <div class="card">
@@ -362,6 +414,36 @@ def serve_ui():
 
       <script>
         let exerciseCatalog = [];
+        let timerInterval = null;
+
+        function toLocalDatetimeInput(dateObj) {
+          const offset = dateObj.getTimezoneOffset();
+          const local = new Date(dateObj.getTime() - offset * 60000);
+          return local.toISOString().slice(0, 16);
+        }
+
+        function startSession() {
+          const now = new Date();
+          document.getElementById('start-time').value = toLocalDatetimeInput(now);
+          document.getElementById('end-time').value = '';
+          const btn = document.getElementById('start-btn');
+          btn.innerText = '● Active';
+          btn.style.background = '#d97706';
+
+          if (timerInterval) clearInterval(timerInterval);
+          timerInterval = setInterval(updateLiveTimer, 1000);
+          updateLiveTimer();
+        }
+
+        function updateLiveTimer() {
+          const startVal = document.getElementById('start-time').value;
+          if (!startVal) return;
+          const diffSecs = Math.max(0, Math.floor((Date.now() - new Date(startVal).getTime()) / 1000));
+          const hrs = String(Math.floor(diffSecs / 3600)).padStart(2, '0');
+          const mins = String(Math.floor((diffSecs % 3600) / 60)).padStart(2, '0');
+          const secs = String(diffSecs % 60).padStart(2, '0');
+          document.getElementById('live-timer').innerText = `${hrs}:${mins}:${secs}`;
+        }
 
         function getAuthHeaders() {
           const token = localStorage.getItem('workout_token');
@@ -390,8 +472,8 @@ def serve_ui():
 
         function logout() {
           localStorage.removeItem('workout_token');
+          if (timerInterval) clearInterval(timerInterval);
           document.getElementById('app-screen').classList.add('hidden');
-          document.getElementById('app-screen').style.display = 'none';
           document.getElementById('user-controls').classList.add('hidden');
           document.getElementById('auth-screen').classList.remove('hidden');
         }
@@ -399,9 +481,11 @@ def serve_ui():
         async function showApp(username) {
           document.getElementById('auth-screen').classList.add('hidden');
           document.getElementById('app-screen').classList.remove('hidden');
-          document.getElementById('app-screen').style.display = 'flex';
           document.getElementById('user-controls').classList.remove('hidden');
           document.getElementById('user-badge').innerText = '@' + username;
+
+          // Default Start Time to when the user opens the logger
+          document.getElementById('start-time').value = toLocalDatetimeInput(new Date());
 
           const res = await fetch('/api/exercises', { headers: getAuthHeaders() });
           exerciseCatalog = await res.json();
@@ -412,10 +496,7 @@ def serve_ui():
 
         async function init() {
           const token = localStorage.getItem('workout_token');
-          if (!token) {
-            document.getElementById('app-screen').style.display = 'none';
-            return;
-          }
+          if (!token) return;
           const meRes = await fetch('/api/me', { headers: getAuthHeaders() });
           if (meRes.ok) {
             const me = await meRes.json();
@@ -443,6 +524,12 @@ def serve_ui():
         async function submitWorkout() {
           const title = document.getElementById('workout-title').value;
           const notes = document.getElementById('workout-notes').value;
+          const startVal = document.getElementById('start-time').value;
+          const endVal = document.getElementById('end-time').value;
+
+          const startedAt = startVal ? new Date(startVal).toISOString() : null;
+          const endedAt = endVal ? new Date(endVal).toISOString() : new Date().toISOString();
+
           const rows = document.querySelectorAll('.set-row');
           const sets = [];
 
@@ -464,17 +551,43 @@ def serve_ui():
           const res = await fetch('/api/workouts', {
             method: 'POST',
             headers: getAuthHeaders(),
-            body: JSON.stringify({ title, notes, sets })
+            body: JSON.stringify({
+              title,
+              notes,
+              started_at: startedAt,
+              ended_at: endedAt,
+              sets
+            })
           });
 
           if (res.ok) {
+            if (timerInterval) clearInterval(timerInterval);
+            document.getElementById('live-timer').innerText = '00:00:00';
+            const btn = document.getElementById('start-btn');
+            btn.innerText = '▶ Start Now';
+            btn.style.background = 'var(--green)';
+
             document.getElementById('sets-container').innerHTML = '';
             document.getElementById('workout-notes').value = '';
+            document.getElementById('start-time').value = toLocalDatetimeInput(new Date());
+            document.getElementById('end-time').value = '';
             addSetRow();
             loadHistory();
           } else {
-            alert('Failed to save workout');
+            const err = await res.json();
+            alert(err.detail || 'Failed to save workout');
           }
+        }
+
+        function formatTimeRange(w) {
+          if (!w.started_at) return w.date;
+          const start = new Date(w.started_at);
+          const end = w.ended_at ? new Date(w.ended_at) : null;
+          const timeOpts = { hour: 'numeric', minute: '2-digit' };
+          const startStr = start.toLocaleTimeString([], timeOpts);
+          const endStr = end ? end.toLocaleTimeString([], timeOpts) : '';
+          const durStr = w.duration_mins ? ` • ${w.duration_mins} min` : '';
+          return `${w.date} (${startStr}${endStr ? ' – ' + endStr : ''}${durStr})`;
         }
 
         async function loadHistory() {
@@ -489,9 +602,9 @@ def serve_ui():
 
           container.innerHTML = data.map(w => `
             <div class="history-item">
-              <div style="display:flex; justify-content:space-between; align-items:center;">
+              <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
                 <strong>${w.title}</strong>
-                <span class="badge">${w.date}</span>
+                <span class="badge">${formatTimeRange(w)}</span>
               </div>
               ${w.notes ? `<p style="font-size:13px; color:var(--muted); margin:4px 0;">${w.notes}</p>` : ''}
               <ul style="margin: 6px 0 0 16px; padding:0; font-size:14px;">
