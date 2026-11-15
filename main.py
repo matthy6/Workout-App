@@ -361,15 +361,6 @@ def get_saved_foods(
     ]
 
 
-@app.post("/api/nutrition", status_code=status.HTTP_201_CREATED)
-def log_food(
-    payload: FoodLogCreate := None,
-    current_user: User = Depends(get_current_user),
-    session: Session = Depends(get_session),
-):
-    pass  # Defined below with proper type annotation
-
-# Re-defining log_food with correct type hint
 class FoodLogCreate(SQLModel):
     date: str
     food_name: str
