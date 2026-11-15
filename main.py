@@ -100,6 +100,7 @@ class SetLog(SQLModel, table=True):
     weight: float
     reps: int
     rpe: Optional[float] = None
+    notes: Optional[str] = None
 
     workout: Optional[WorkoutSession] = Relationship(back_populates="sets")
 
@@ -236,6 +237,7 @@ class SetInput(SQLModel):
     weight: float
     reps: int
     rpe: Optional[float] = None
+    notes: Optional[str] = None
 
 
 class WorkoutCreate(SQLModel):
@@ -274,6 +276,7 @@ def save_workout(
     session.refresh(workout)
 
     for item in payload.sets:
+        clean_note = item.notes.strip() if item.notes else None
         session.add(
             SetLog(
                 workout_id=workout.id,
@@ -282,6 +285,7 @@ def save_workout(
                 weight=item.weight,
                 reps=item.reps,
                 rpe=item.rpe,
+                notes=clean_note or None,
             )
         )
 
@@ -322,6 +326,7 @@ def list_workouts(
                         "weight": s.weight,
                         "reps": s.reps,
                         "rpe": s.rpe,
+                        "notes": s.notes,
                     }
                     for s in w.sets
                 ],
@@ -330,7 +335,7 @@ def list_workouts(
     return results
 
 
-# --- 7. Web Interface with Custom Exercises, Start/End Time & Auth ---
+# --- 7. Web Interface with Individual Set Notes, Custom Exercises & Timer ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -356,9 +361,11 @@ def serve_ui():
         button:hover { opacity: 0.9; }
         .time-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
         .timer-bar { display: flex; justify-content: space-between; align-items: center; background: #262626; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid var(--border); }
-        .set-row { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; gap: 6px; align-items: center; margin-bottom: 8px; }
+        .set-card { background: #252525; border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-bottom: 10px; }
+        .set-row { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; gap: 6px; align-items: center; margin-bottom: 6px; }
         .set-row input, .set-row select { margin: 0; }
-        .btn-del { background: #dc2626; padding: 8px 12px; width: auto; }
+        .set-note { margin: 0; padding: 7px 10px; font-size: 13px; background: #1e1e1e; }
+        .btn-del { background: #dc2626; padding: 8px 12px; width: auto; margin: 0; }
         .btn-small { width: auto; padding: 6px 12px; font-size: 13px; background: #374151; margin: 0; }
         .history-item { border-bottom: 1px solid var(--border); padding: 12px 0; }
         .history-item:last-child { border: none; }
@@ -413,7 +420,7 @@ def serve_ui():
               </div>
             </div>
 
-            <textarea id="workout-notes" placeholder="Session notes (optional)..." rows="2"></textarea>
+            <textarea id="workout-notes" placeholder="Overall session notes (optional)..." rows="2"></textarea>
 
             <h3>Sets</h3>
             <datalist id="exercise-options"></datalist>
@@ -534,16 +541,19 @@ def serve_ui():
 
         function addSetRow() {
           const container = document.getElementById('sets-container');
-          const row = document.createElement('div');
-          row.className = 'set-row';
-          row.innerHTML = `
-            <input type="text" class="set-ex" list="exercise-options" placeholder="Exercise name...">
-            <input type="number" class="set-lbs" placeholder="lbs" step="2.5">
-            <input type="number" class="set-reps" placeholder="reps">
-            <input type="number" class="set-rpe" placeholder="RPE" step="0.5" min="1" max="10">
-            <button class="btn-del" onclick="this.parentElement.remove()">✕</button>
+          const card = document.createElement('div');
+          card.className = 'set-card';
+          card.innerHTML = `
+            <div class="set-row">
+              <input type="text" class="set-ex" list="exercise-options" placeholder="Exercise name...">
+              <input type="number" class="set-lbs" placeholder="lbs" step="2.5">
+              <input type="number" class="set-reps" placeholder="reps">
+              <input type="number" class="set-rpe" placeholder="RPE" step="0.5" min="1" max="10">
+              <button class="btn-del" onclick="this.closest('.set-card').remove()">✕</button>
+            </div>
+            <input type="text" class="set-note" placeholder="Set note (e.g., paused reps, beltless, form cue...)">
           `;
-          container.appendChild(row);
+          container.appendChild(card);
         }
 
         async function submitWorkout() {
@@ -555,16 +565,24 @@ def serve_ui():
           const startedAt = startVal ? new Date(startVal).toISOString() : null;
           const endedAt = endVal ? new Date(endVal).toISOString() : new Date().toISOString();
 
-          const rows = document.querySelectorAll('.set-row');
+          const cards = document.querySelectorAll('.set-card');
           const sets = [];
 
-          rows.forEach((r, idx) => {
-            const ex = r.querySelector('.set-ex').value.trim();
-            const lbs = parseFloat(r.querySelector('.set-lbs').value) || 0;
-            const reps = parseInt(r.querySelector('.set-reps').value) || 0;
-            const rpe = parseFloat(r.querySelector('.set-rpe').value) || null;
+          cards.forEach((c, idx) => {
+            const ex = c.querySelector('.set-ex').value.trim();
+            const lbs = parseFloat(c.querySelector('.set-lbs').value) || 0;
+            const reps = parseInt(c.querySelector('.set-reps').value) || 0;
+            const rpe = parseFloat(c.querySelector('.set-rpe').value) || null;
+            const setNote = c.querySelector('.set-note').value.trim() || null;
             if (ex && reps > 0) {
-              sets.push({ exercise_name: ex, set_number: idx + 1, weight: lbs, reps: reps, rpe: rpe });
+              sets.push({
+                exercise_name: ex,
+                set_number: idx + 1,
+                weight: lbs,
+                reps: reps,
+                rpe: rpe,
+                notes: setNote
+              });
             }
           });
 
@@ -635,7 +653,12 @@ def serve_ui():
               </div>
               ${w.notes ? `<p style="font-size:13px; color:var(--muted); margin:4px 0;">${w.notes}</p>` : ''}
               <ul style="margin: 6px 0 0 16px; padding:0; font-size:14px;">
-                ${w.sets.map(s => `<li>${s.exercise}: ${s.weight} lbs × ${s.reps} reps ${s.rpe ? `(@ RPE ${s.rpe})` : ''}</li>`).join('')}
+                ${w.sets.map(s => `
+                  <li style="margin-bottom:4px;">
+                    ${s.exercise}: ${s.weight} lbs × ${s.reps} reps ${s.rpe ? `(@ RPE ${s.rpe})` : ''}
+                    ${s.notes ? `<div style="font-size:12px; color:var(--muted); margin-top:2px;">↳ ${s.notes}</div>` : ''}
+                  </li>
+                `).join('')}
               </ul>
             </div>
           `).join('');
