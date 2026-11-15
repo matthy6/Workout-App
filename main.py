@@ -130,7 +130,7 @@ class TemplateSet(SQLModel, table=True):
     rpe: Optional[float] = None
     notes: Optional[str] = None
 
-    template: Optional[WorkoutTemplate] = Relationship(back_populates="template")
+    template: Optional[WorkoutTemplate] = Relationship(back_populates="sets")
 
 
 class FoodLog(SQLModel, table=True):
@@ -636,7 +636,7 @@ def list_workouts(
     return results
 
 
-# --- 7. Web Interface with Nutrition Unit Datalist ---
+# --- 7. Web Interface ---
 
 
 @app.get("/", response_class=HTMLResponse)
