@@ -154,7 +154,6 @@ class FoodDatabase(SQLModel, table=True):
     user_id: UUID = Field(foreign_key="user.id", index=True)
     food_name: str = Field(index=True)
     default_unit: Optional[str] = None
-    # Macros stored per 1 unit (or per 100g/oz depending on input ratio)
     calories_per_unit: float
     protein_per_unit: float
     carbs_per_unit: float
@@ -215,7 +214,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Workout & Nutrition Tracker", lifespan=lifespan)
 
-# --- 6. Auth, Exercise, Template, Workout & Nutrition API Endpoints ---
+# --- 6. API Endpoints ---
 
 
 class AuthPayload(SQLModel):
@@ -296,9 +295,6 @@ def get_exercises(
     return sorted(combined, key=lambda x: x["name"].lower())
 
 
-# --- Exercise History Endpoint ---
-
-
 @app.get("/api/exercises/history")
 def get_exercise_history(
     name: str,
@@ -342,20 +338,6 @@ def get_exercise_history(
     return results
 
 
-# --- Nutrition / Calorie Tracker & Food Memory Endpoints ---
-
-
-class FoodLogCreate(SQLModel):
-    date: str
-    food_name: str
-    amount: Optional[float] = None
-    unit: Optional[str] = None
-    calories: int
-    protein: Optional[float] = 0.0
-    carbs: Optional[float] = 0.0
-    fats: Optional[float] = 0.0
-
-
 @app.get("/api/nutrition/foods")
 def get_saved_foods(
     current_user: User = Depends(get_current_user),
@@ -381,13 +363,32 @@ def get_saved_foods(
 
 @app.post("/api/nutrition", status_code=status.HTTP_201_CREATED)
 def log_food(
+    payload: FoodLogCreate := None,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    pass  # Defined below with proper type annotation
+
+# Re-defining log_food with correct type hint
+class FoodLogCreate(SQLModel):
+    date: str
+    food_name: str
+    amount: Optional[float] = None
+    unit: Optional[str] = None
+    calories: int
+    protein: Optional[float] = 0.0
+    carbs: Optional[float] = 0.0
+    fats: Optional[float] = 0.0
+
+
+@app.post("/api/nutrition", status_code=status.HTTP_201_CREATED)
+def log_food(
     payload: FoodLogCreate,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     clean_name = payload.food_name.strip()
     
-    # Save log entry
     food = FoodLog(
         user_id=current_user.id,
         date=payload.date,
@@ -401,7 +402,6 @@ def log_food(
     )
     session.add(food)
 
-    # Auto-update or create food memory profile if amount is provided (> 0)
     if payload.amount and payload.amount > 0:
         amt = payload.amount
         existing_db = session.exec(
@@ -477,6 +477,52 @@ def get_food_logs(
             for item in logs
         ],
     }
+
+
+@app.get("/api/nutrition/history")
+def get_all_nutrition_history(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    logs = session.exec(
+        select(FoodLog)
+        .where(FoodLog.user_id == current_user.id)
+        .order_by(FoodLog.date.desc())
+    ).all()
+
+    history_map = {}
+    for l in logs:
+        if l.date not in history_map:
+            history_map[l.date] = {
+                "date": l.date,
+                "items": []
+            }
+        history_map[l.date]["items"].append({
+            "id": str(l.id),
+            "food_name": l.food_name,
+            "amount": l.amount,
+            "unit": l.unit,
+            "calories": l.calories,
+            "protein": l.protein,
+            "carbs": l.carbs,
+            "fats": l.fats
+        })
+
+    results = []
+    for d_data in history_map.values():
+        total_cals = sum(i["calories"] for i in d_data["items"])
+        total_pro = sum(i["protein"] or 0 for i in d_data["items"])
+        total_carb = sum(i["carbs"] or 0 for i in d_data["items"])
+        total_fat = sum(i["fats"] or 0 for i in d_data["items"])
+        d_data["totals"] = {
+            "calories": total_cals,
+            "protein": round(total_pro, 1),
+            "carbs": round(total_carb, 1),
+            "fats": round(total_fat, 1)
+        }
+        results.append(d_data)
+
+    return results
 
 
 @app.delete("/api/nutrition/{food_id}")
@@ -712,7 +758,7 @@ def list_workouts(
     return results
 
 
-# --- 7. Web Interface with Auto-scaling Foods ---
+# --- 7. Web Interface with Nutrition History Tab ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -736,8 +782,8 @@ def serve_ui():
         input, select, textarea, button { width: 100%; padding: 10px; margin-bottom: 8px; border-radius: 6px; border: 1px solid var(--border); background: #2a2a2a; color: var(--text); font-size: 15px; }
         button { background: var(--accent); color: white; border: none; font-weight: 600; cursor: pointer; }
         button:hover { opacity: 0.9; }
-        .tab-bar { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 4px; background: var(--card); padding: 6px; border-radius: 10px; border: 1px solid var(--border); }
-        .tab-btn { margin: 0; padding: 8px 2px; font-size: 12px; background: transparent; color: var(--muted); border-radius: 7px; text-align: center; transition: background 0.15s, color 0.15s; }
+        .tab-bar { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; background: var(--card); padding: 6px; border-radius: 10px; border: 1px solid var(--border); }
+        .tab-btn { margin: 0; padding: 8px 1px; font-size: 11px; background: transparent; color: var(--muted); border-radius: 7px; text-align: center; transition: background 0.15s, color 0.15s; }
         .tab-btn.active { background: var(--accent); color: white; }
         .template-bar { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; background: #262626; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid var(--border); }
         .template-bar select { margin: 0; font-size: 14px; padding: 8px; }
@@ -787,7 +833,8 @@ def serve_ui():
           <div class="tab-bar">
             <button type="button" id="tab-btn-log" class="tab-btn active" onclick="switchTab('log')">Log</button>
             <button type="button" id="tab-btn-nutrition" class="tab-btn" onclick="switchTab('nutrition')">Nutrition</button>
-            <button type="button" id="tab-btn-history" class="tab-btn" onclick="switchTab('history')">History <span id="history-count"></span></button>
+            <button type="button" id="tab-btn-nut-history" class="tab-btn" onclick="switchTab('nut-history')">Diet Hist</button>
+            <button type="button" id="tab-btn-history" class="tab-btn" onclick="switchTab('history')">Workouts</button>
             <button type="button" id="tab-btn-exercises" class="tab-btn" onclick="switchTab('exercises')">Exercises</button>
           </div>
 
@@ -907,13 +954,19 @@ def serve_ui():
             </div>
           </div>
 
-          <!-- Tab 3: Past Workouts History -->
+          <!-- Tab 3: Nutrition History -->
+          <div id="tab-nut-history" class="card hidden">
+            <h2>Nutrition History</h2>
+            <div id="nutrition-history-container">Loading diet history...</div>
+          </div>
+
+          <!-- Tab 4: Past Workouts History -->
           <div id="tab-history" class="card hidden">
             <h2>Past Workouts</h2>
             <div id="history-container">Loading past workouts...</div>
           </div>
 
-          <!-- Tab 4: Exercise Performance History -->
+          <!-- Tab 5: Exercise Performance History -->
           <div id="tab-exercises" class="card hidden">
             <h2>Exercise Progress</h2>
             <div style="display:flex; gap:6px; margin-bottom:12px;">
@@ -937,20 +990,24 @@ def serve_ui():
         function switchTab(tabName) {
           const logView = document.getElementById('tab-log');
           const nutView = document.getElementById('tab-nutrition');
+          const nutHistView = document.getElementById('tab-nut-history');
           const historyView = document.getElementById('tab-history');
           const exercisesView = document.getElementById('tab-exercises');
           
           const logBtn = document.getElementById('tab-btn-log');
           const nutBtn = document.getElementById('tab-btn-nutrition');
+          const nutHistBtn = document.getElementById('tab-btn-nut-history');
           const historyBtn = document.getElementById('tab-btn-history');
           const exercisesBtn = document.getElementById('tab-btn-exercises');
 
           logView.classList.add('hidden');
           nutView.classList.add('hidden');
+          nutHistView.classList.add('hidden');
           historyView.classList.add('hidden');
           exercisesView.classList.add('hidden');
           logBtn.classList.remove('active');
           nutBtn.classList.remove('active');
+          nutHistBtn.classList.remove('active');
           historyBtn.classList.remove('active');
           exercisesBtn.classList.remove('active');
 
@@ -959,6 +1016,10 @@ def serve_ui():
             nutBtn.classList.add('active');
             loadNutrition();
             refreshSavedFoods();
+          } else if (tabName === 'nut-history') {
+            nutHistView.classList.remove('hidden');
+            nutHistBtn.classList.add('active');
+            loadNutritionHistory();
           } else if (tabName === 'history') {
             historyView.classList.remove('hidden');
             historyBtn.classList.add('active');
@@ -1065,13 +1126,10 @@ def serve_ui():
           const match = savedFoodsCatalog.find(f => f.food_name.toLowerCase() === enteredName);
           if (match) {
             if (match.unit) document.getElementById('food-unit').value = match.unit;
-            // Store per-unit rates temporarily on the element dataset for instant scaling
             document.getElementById('food-name').dataset.calRate = match.calories_per_unit;
             document.getElementById('food-name').dataset.proRate = match.protein_per_unit;
             document.getElementById('food-name').dataset.carbRate = match.carbs_per_unit;
             document.getElementById('food-name').dataset.fatRate = match.fats_per_unit;
-            
-            // If amount is already filled, recalculate immediately
             onFoodAmountInput();
           } else {
             delete document.getElementById('food-name').dataset.calRate;
@@ -1352,6 +1410,43 @@ def serve_ui():
           }).join('');
         }
 
+        async function loadNutritionHistory() {
+          const container = document.getElementById('nutrition-history-container');
+          container.innerHTML = '<p style="color: var(--muted)">Loading diet history...</p>';
+
+          const res = await fetch('/api/nutrition/history', { headers: getAuthHeaders() });
+          if (!res.ok) {
+            container.innerHTML = '<p style="color: #dc2626;">Failed to load nutrition history.</p>';
+            return;
+          }
+
+          const data = await res.json();
+          if (data.length === 0) {
+            container.innerHTML = '<p style="color: var(--muted)">No past nutrition logs found.</p>';
+            return;
+          }
+
+          container.innerHTML = data.map(d => `
+            <div class="history-item">
+              <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:6px;">
+                <strong>📅 ${d.date}</strong>
+                <span class="badge">🔥 ${d.totals.calories} cals | P: ${d.totals.protein}g | C: ${d.totals.carbs}g | F: ${d.totals.fats}g</span>
+              </div>
+              <ul style="margin: 6px 0 0 16px; padding:0; font-size:14px;">
+                ${d.items.map(i => {
+                  const amtStr = i.amount !== null && i.amount !== undefined ? `${i.amount} ${i.unit || ''}` : '';
+                  return `
+                    <li style="margin-bottom:4px;">
+                      <strong>${i.food_name}</strong> ${amtStr ? `(${amtStr.trim()})` : ''}: 
+                      🔥 ${i.calories} cals (P: ${i.protein}g, C: ${i.carbs}g, F: ${i.fats}g)
+                    </li>
+                  `;
+                }).join('')}
+              </ul>
+            </div>
+          `).join('');
+        }
+
         async function addFoodItem() {
           const dateStr = document.getElementById('nutrition-date').value;
           const foodName = document.getElementById('food-name').value.trim();
@@ -1446,7 +1541,7 @@ def serve_ui():
           const data = await res.json();
           const container = document.getElementById('history-container');
           const countBadge = document.getElementById('history-count');
-          countBadge.innerText = data.length > 0 ? `(${data.length})` : '';
+          if (countBadge) countBadge.innerText = data.length > 0 ? `(${data.length})` : '';
 
           if (data.length === 0) {
             container.innerHTML = '<p style="color: var(--muted)">No workouts logged yet.</p>';
