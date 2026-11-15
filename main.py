@@ -5,7 +5,9 @@ from typing import List, Optional
 from uuid import UUID, uuid4
 from dotenv import load_dotenv
 from sqlmodel import create_engine
-
+import secrets
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from sqlmodel import Field, Relationship, Session, SQLModel, create_engine, select
@@ -13,6 +15,24 @@ from sqlmodel import Field, Relationship, Session, SQLModel, create_engine, sele
 
 load_dotenv()
 # --- 1. Database Configuration (SQLite) ---
+
+security = HTTPBasic()
+
+def verify_auth(credentials: HTTPBasicCredentials = Depends(security)):
+    # Reads from .env / Render Environment Variables, with a fallback default
+    expected_user = os.getenv("APP_USERNAME", "admin")
+    expected_pass = os.getenv("APP_PASSWORD", "changeme123")
+
+    correct_user = secrets.compare_digest(credentials.username, expected_user)
+    correct_pass = secrets.compare_digest(credentials.password, expected_pass)
+
+    if not (correct_user and correct_pass):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
 
 DATABASE_URL = (
     os.getenv("DATABASE_URL_POOLED")
@@ -131,7 +151,11 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Workout Tracker", lifespan=lifespan)
+app = FastAPI(
+    title="Workout Tracker",
+    lifespan=lifespan,
+    dependencies=[Depends(verify_auth)],
+)
 
 # --- 4. API Endpoints ---
 
