@@ -130,7 +130,7 @@ class TemplateSet(SQLModel, table=True):
     rpe: Optional[float] = None
     notes: Optional[str] = None
 
-    template: Optional[WorkoutTemplate] = Relationship(back_populates="sets")
+    template: Optional[WorkoutTemplate] = Relationship(back_populates="template")
 
 
 class FoodLog(SQLModel, table=True):
@@ -138,6 +138,8 @@ class FoodLog(SQLModel, table=True):
     user_id: UUID = Field(foreign_key="user.id", index=True)
     date: str = Field(index=True)  # YYYY-MM-DD format
     food_name: str
+    amount: Optional[float] = None
+    unit: Optional[str] = None
     calories: int
     protein: Optional[float] = 0.0
     carbs: Optional[float] = 0.0
@@ -196,7 +198,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Workout Tracker", lifespan=lifespan)
+app = FastAPI(title="Workout & Nutrition Tracker", lifespan=lifespan)
 
 # --- 6. Auth, Exercise, Template, Workout & Nutrition API Endpoints ---
 
@@ -331,6 +333,8 @@ def get_exercise_history(
 class FoodLogCreate(SQLModel):
     date: str
     food_name: str
+    amount: Optional[float] = None
+    unit: Optional[str] = None
     calories: int
     protein: Optional[float] = 0.0
     carbs: Optional[float] = 0.0
@@ -347,6 +351,8 @@ def log_food(
         user_id=current_user.id,
         date=payload.date,
         food_name=payload.food_name.strip(),
+        amount=payload.amount,
+        unit=payload.unit.strip() if payload.unit else None,
         calories=payload.calories,
         protein=payload.protein,
         carbs=payload.carbs,
@@ -385,6 +391,8 @@ def get_food_logs(
             {
                 "id": str(item.id),
                 "food_name": item.food_name,
+                "amount": item.amount,
+                "unit": item.unit,
                 "calories": item.calories,
                 "protein": item.protein,
                 "carbs": item.carbs,
@@ -628,7 +636,7 @@ def list_workouts(
     return results
 
 
-# --- 7. Web Interface with Nutrition & Calorie Tracker Tab ---
+# --- 7. Web Interface with Nutrition Unit Datalist ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -789,6 +797,23 @@ def serve_ui():
             <div style="background:#262626; padding:10px; border-radius:8px; border:1px solid var(--border); margin-bottom:12px;">
               <h3 style="margin-bottom:8px; font-size:14px;">Log Food / Meal</h3>
               <input type="text" id="food-name" placeholder="Food name (e.g. Chicken breast, Rice)" style="margin-bottom:6px;">
+              
+              <!-- Amount & Unit Datalist Row -->
+              <div style="display:grid; grid-template-columns: 1fr 1fr; gap:6px; margin-bottom:6px;">
+                <input type="number" id="food-amount" placeholder="Amount (e.g. 150)" step="any" style="margin:0;">
+                <input type="text" id="food-unit" list="unit-options" placeholder="Unit (grams, oz, cups...)" style="margin:0;">
+                <datalist id="unit-options">
+                  <option value="grams">
+                  <option value="oz">
+                  <option value="cups">
+                  <option value="scoops">
+                  <option value="tbsp">
+                  <option value="ml">
+                  <option value="pieces">
+                  <option value="servings">
+                </datalist>
+              </div>
+
               <div style="display:grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap:6px; margin-bottom:6px;">
                 <input type="number" id="food-cal" placeholder="Cals" style="margin:0;">
                 <input type="number" id="food-pro" placeholder="Pro (g)" step="0.5" style="margin:0;">
@@ -1188,20 +1213,25 @@ def serve_ui():
             return;
           }
 
-          container.innerHTML = data.items.map(i => `
-            <div style="display:flex; justify-content:space-between; align-items:center; background:#252525; padding:8px 12px; border-radius:8px; margin-bottom:6px; border:1px solid var(--border);">
-              <div>
-                <strong>${i.food_name}</strong>
-                <div style="font-size:12px; color:var(--muted);">🔥 ${i.calories} cals | P: ${i.protein}g | C: ${i.carbs}g | F: ${i.fats}g</div>
+          container.innerHTML = data.items.map(i => {
+            const amtStr = i.amount !== null && i.amount !== undefined ? `${i.amount} ${i.unit || ''}` : '';
+            return `
+              <div style="display:flex; justify-content:space-between; align-items:center; background:#252525; padding:8px 12px; border-radius:8px; margin-bottom:6px; border:1px solid var(--border);">
+                <div>
+                  <strong>${i.food_name}</strong> ${amtStr ? `<span style="font-size:13px; color:var(--muted);">(${amtStr.trim()})</span>` : ''}
+                  <div style="font-size:12px; color:var(--muted);">🔥 ${i.calories} cals | P: ${i.protein}g | C: ${i.carbs}g | F: ${i.fats}g</div>
+                </div>
+                <button class="btn-del" onclick="deleteFoodItem('${i.id}')" style="padding:6px 10px;">✕</button>
               </div>
-              <button class="btn-del" onclick="deleteFoodItem('${i.id}')" style="padding:6px 10px;">✕</button>
-            </div>
-          `).join('');
+            `;
+          }).join('');
         }
 
         async function addFoodItem() {
           const dateStr = document.getElementById('nutrition-date').value;
           const foodName = document.getElementById('food-name').value.trim();
+          const amountVal = document.getElementById('food-amount').value;
+          const unitVal = document.getElementById('food-unit').value.trim();
           const calories = parseInt(document.getElementById('food-cal').value);
           const protein = parseFloat(document.getElementById('food-pro').value) || 0;
           const carbs = parseFloat(document.getElementById('food-carb').value) || 0;
@@ -1218,6 +1248,8 @@ def serve_ui():
             body: JSON.stringify({
               date: dateStr,
               food_name: foodName,
+              amount: amountVal !== '' ? parseFloat(amountVal) : null,
+              unit: unitVal || null,
               calories: calories,
               protein: protein,
               carbs: carbs,
@@ -1227,6 +1259,8 @@ def serve_ui():
 
           if (res.ok) {
             document.getElementById('food-name').value = '';
+            document.getElementById('food-amount').value = '';
+            document.getElementById('food-unit').value = '';
             document.getElementById('food-cal').value = '';
             document.getElementById('food-pro').value = '';
             document.getElementById('food-carb').value = '';
@@ -1254,9 +1288,8 @@ def serve_ui():
           if (!weightLbs) return;
           const weightKg = parseFloat(weightLbs) / 2.20462;
           
-          // BMR estimation using Mifflin-St Jeor rough athletic baseline
-          const bmr = (10 * weightKg) + (6.25 * 177) - (5 * 25) + 5; // assumes ~5'9" male baseline
-          const tdee = Math.round(bmr * 1.55); // Moderate exercise multiplier
+          const bmr = (10 * weightKg) + (6.25 * 177) - (5 * 25) + 5;
+          const tdee = Math.round(bmr * 1.55);
 
           const goal = prompt(`Estimated Maintenance (TDEE): ~${tdee} cals/day.\\n\\nSelect goal:\\n1. Bulk (+300 cals)\\n2. Cut (-500 cals)\\n3. Maintain`, '1');
           
