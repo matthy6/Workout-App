@@ -7,9 +7,8 @@ from typing import List, Optional
 from uuid import UUID, uuid4
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.responses import HTMLResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlmodel import Field, Relationship, Session, SQLModel, create_engine, select
 
 load_dotenv()
@@ -22,20 +21,14 @@ DATABASE_URL = (
     or "sqlite:///./workout.db"
 )
 
-# Fix for Render/Neon URLs starting with postgres:// instead of postgresql://
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
 elif DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
 
 connect_args = {"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
-
-# pool_pre_ping=True prevents dropped connection errors when Neon wakes up from sleep
 engine = create_engine(
-    DATABASE_URL,
-    echo=False,
-    connect_args=connect_args,
-    pool_pre_ping=True,
+    DATABASE_URL, echo=False, connect_args=connect_args, pool_pre_ping=True
 )
 
 
@@ -70,6 +63,7 @@ class User(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     username: str = Field(index=True, unique=True)
     hashed_password: str
+    auth_token: Optional[str] = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     workouts: List["WorkoutSession"] = Relationship(back_populates="user")
@@ -108,119 +102,100 @@ class SetLog(SQLModel, table=True):
     workout: Optional[WorkoutSession] = Relationship(back_populates="sets")
 
 
-# --- 4. Authentication Dependency ---
-
-security = HTTPBasic()
+# --- 4. Token Authentication Dependency ---
 
 
 def get_current_user(
-    credentials: HTTPBasicCredentials = Depends(security),
+    authorization: Optional[str] = Header(default=None),
     session: Session = Depends(get_session),
 ) -> User:
-    user = session.exec(
-        select(User).where(User.username == credentials.username.lower().strip())
-    ).first()
-
-    if not user or not verify_password(credentials.password, user.hashed_password):
+    if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password",
-            headers={"WWW-Authenticate": "Basic"},
+            detail="Not logged in",
+        )
+    token = authorization.replace("Bearer ", "", 1).strip()
+    user = session.exec(select(User).where(User.auth_token == token)).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired session",
         )
     return user
 
 
-# --- 5. App Lifecycle & Initial Data Seed ---
+# --- 5. App Lifecycle & Seed Data ---
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     SQLModel.metadata.create_all(engine)
     with Session(engine) as session:
-        # Seed default exercises if table is empty
-        existing = session.exec(select(Exercise)).first()
-        if not existing:
+        if not session.exec(select(Exercise)).first():
             default_exercises = [
-                Exercise(
-                    name="Barbell Squat",
-                    primary_muscle="Quads",
-                    equipment="Barbell",
-                ),
-                Exercise(
-                    name="Deadlift",
-                    primary_muscle="Hamstrings/Back",
-                    equipment="Barbell",
-                ),
-                Exercise(
-                    name="Incline Bench Press",
-                    primary_muscle="Upper Chest",
-                    equipment="Barbell",
-                ),
-                Exercise(
-                    name="Romanian Deadlift (RDL)",
-                    primary_muscle="Hamstrings",
-                    equipment="Barbell",
-                ),
-                Exercise(
-                    name="Dumbbell Lateral Raise",
-                    primary_muscle="Shoulders",
-                    equipment="Dumbbell",
-                ),
-                Exercise(
-                    name="Lat Pulldown",
-                    primary_muscle="Back",
-                    equipment="Cable",
-                ),
-                Exercise(
-                    name="Triceps Rope Pushdown",
-                    primary_muscle="Triceps",
-                    equipment="Cable",
-                ),
+                Exercise(name="Barbell Squat", primary_muscle="Quads", equipment="Barbell"),
+                Exercise(name="Deadlift", primary_muscle="Hamstrings/Back", equipment="Barbell"),
+                Exercise(name="Incline Bench Press", primary_muscle="Upper Chest", equipment="Barbell"),
+                Exercise(name="Romanian Deadlift (RDL)", primary_muscle="Hamstrings", equipment="Barbell"),
+                Exercise(name="Dumbbell Lateral Raise", primary_muscle="Shoulders", equipment="Dumbbell"),
+                Exercise(name="Lat Pulldown", primary_muscle="Back", equipment="Cable"),
+                Exercise(name="Triceps Rope Pushdown", primary_muscle="Triceps", equipment="Cable"),
             ]
             session.add_all(default_exercises)
             session.commit()
 
-        # Seed initial admin user from .env / Render Environment Variables if no users exist
         if not session.exec(select(User)).first():
             init_user = os.getenv("APP_USERNAME", "admin").lower().strip()
             init_pass = os.getenv("APP_PASSWORD", "changeme123")
-            session.add(
-                User(username=init_user, hashed_password=hash_password(init_pass))
-            )
+            session.add(User(username=init_user, hashed_password=hash_password(init_pass)))
             session.commit()
     yield
 
 
 app = FastAPI(title="Workout Tracker", lifespan=lifespan)
 
-# --- 6. API Endpoints ---
+# --- 6. Auth & Workout API Endpoints ---
 
 
-class UserRegister(SQLModel):
+class AuthPayload(SQLModel):
     username: str
     password: str
 
 
 @app.post("/api/register", status_code=status.HTTP_201_CREATED)
-def register_user(payload: UserRegister, session: Session = Depends(get_session)):
+def register_user(payload: AuthPayload, session: Session = Depends(get_session)):
     clean_username = payload.username.lower().strip()
     if len(clean_username) < 3 or len(payload.password) < 6:
         raise HTTPException(
             status_code=400,
             detail="Username must be at least 3 chars and password at least 6 chars.",
         )
-
-    existing = session.exec(select(User).where(User.username == clean_username)).first()
-    if existing:
+    if session.exec(select(User).where(User.username == clean_username)).first():
         raise HTTPException(status_code=400, detail="Username already taken.")
 
+    token = secrets.token_hex(32)
     new_user = User(
         username=clean_username,
         hashed_password=hash_password(payload.password),
+        auth_token=token,
     )
     session.add(new_user)
     session.commit()
-    return {"message": f"Account '{clean_username}' created!"}
+    return {"token": token, "username": clean_username}
+
+
+@app.post("/api/login")
+def login_user(payload: AuthPayload, session: Session = Depends(get_session)):
+    clean_username = payload.username.lower().strip()
+    user = session.exec(select(User).where(User.username == clean_username)).first()
+    if not user or not verify_password(payload.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid username or password.")
+
+    token = secrets.token_hex(32)
+    user.auth_token = token
+    session.add(user)
+    session.commit()
+    return {"token": token, "username": user.username}
 
 
 @app.get("/api/me")
@@ -250,7 +225,7 @@ class WorkoutCreate(SQLModel):
     sets: List[SetInput]
 
 
-@app.post("/api/workouts", response_model=WorkoutSession)
+@app.post("/api/workouts")
 def save_workout(
     payload: WorkoutCreate,
     current_user: User = Depends(get_current_user),
@@ -266,19 +241,19 @@ def save_workout(
     session.refresh(workout)
 
     for item in payload.sets:
-        set_entry = SetLog(
-            workout_id=workout.id,
-            exercise_name=item.exercise_name,
-            set_number=item.set_number,
-            weight=item.weight,
-            reps=item.reps,
-            rpe=item.rpe,
+        session.add(
+            SetLog(
+                workout_id=workout.id,
+                exercise_name=item.exercise_name,
+                set_number=item.set_number,
+                weight=item.weight,
+                reps=item.reps,
+                rpe=item.rpe,
+            )
         )
-        session.add(set_entry)
 
     session.commit()
-    session.refresh(workout)
-    return workout
+    return {"status": "saved", "workout_id": str(workout.id)}
 
 
 @app.get("/api/workouts")
@@ -291,30 +266,28 @@ def list_workouts(
         .where(WorkoutSession.user_id == current_user.id)
         .order_by(WorkoutSession.date.desc())
     ).all()
-    results = []
-    for w in workouts:
-        results.append(
-            {
-                "id": str(w.id),
-                "title": w.title,
-                "date": w.date.strftime("%Y-%m-%d %H:%M"),
-                "notes": w.notes,
-                "sets": [
-                    {
-                        "exercise": s.exercise_name,
-                        "set": s.set_number,
-                        "weight": s.weight,
-                        "reps": s.reps,
-                        "rpe": s.rpe,
-                    }
-                    for s in w.sets
-                ],
-            }
-        )
-    return results
+    return [
+        {
+            "id": str(w.id),
+            "title": w.title,
+            "date": w.date.strftime("%Y-%m-%d %H:%M"),
+            "notes": w.notes,
+            "sets": [
+                {
+                    "exercise": s.exercise_name,
+                    "set": s.set_number,
+                    "weight": s.weight,
+                    "reps": s.reps,
+                    "rpe": s.rpe,
+                }
+                for s in w.sets
+            ],
+        }
+        for w in workouts
+    ]
 
 
-# --- 7. Front-End Web Interface ---
+# --- 7. Web Interface with Built-In Login / Sign Up / Logout ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -343,7 +316,7 @@ def serve_ui():
         .btn-small { width: auto; padding: 6px 12px; font-size: 13px; background: #374151; }
         .history-item { border-bottom: 1px solid var(--border); padding: 12px 0; }
         .history-item:last-child { border: none; }
-        .badge { font-size: 12px; background: #333; padding: 2px 6px; border-radius: 4px; color: var(--muted); }
+        .badge { font-size: 12px; background: #333; padding: 4px 8px; border-radius: 4px; color: var(--muted); }
         .hidden { display: none; }
       </style>
     </head>
@@ -351,83 +324,112 @@ def serve_ui():
       <div class="container">
         <div class="header-bar">
           <h1>🏋️ Workout Logger</h1>
-          <div>
+          <div id="user-controls" class="hidden">
             <span id="user-badge" class="badge" style="margin-right:6px;"></span>
-            <button class="btn-small" onclick="toggleRegister()">+ New Account</button>
+            <button class="btn-small" onclick="logout()">Log Out</button>
           </div>
         </div>
 
-        <!-- Account Creation Card (Hidden by default) -->
-        <div id="register-card" class="card hidden">
-          <h2>Create New Account</h2>
-          <input type="text" id="reg-user" placeholder="New username (min 3 chars)">
-          <input type="password" id="reg-pass" placeholder="New password (min 6 chars)">
-          <button onclick="registerAccount()">Create Account</button>
+        <!-- Login / Sign Up Screen -->
+        <div id="auth-screen" class="card">
+          <h2>Sign In</h2>
+          <input type="text" id="auth-user" placeholder="Username">
+          <input type="password" id="auth-pass" placeholder="Password">
+          <button onclick="handleAuth('/api/login')">Log In</button>
+          <button onclick="handleAuth('/api/register')" style="background: #374151;">Create New Account</button>
         </div>
 
-        <!-- Workout Logger Card -->
-        <div class="card">
-          <h2>Log Session</h2>
-          <input type="text" id="workout-title" placeholder="Workout Title (e.g. Leg Day, Push Day)" value="Workout Session">
-          <textarea id="workout-notes" placeholder="Session notes (optional)..." rows="2"></textarea>
+        <!-- Main App Screen (Hidden until logged in) -->
+        <div id="app-screen" class="hidden" style="display:flex; flex-direction:column; gap:16px;">
+          <div class="card">
+            <h2>Log Session</h2>
+            <input type="text" id="workout-title" placeholder="Workout Title (e.g. Leg Day, Push Day)" value="Workout Session">
+            <textarea id="workout-notes" placeholder="Session notes (optional)..." rows="2"></textarea>
 
-          <h3>Sets</h3>
-          <div id="sets-container"></div>
-          
-          <button type="button" onclick="addSetRow()" style="background: #374151; margin-bottom: 12px;">+ Add Set</button>
-          <button type="button" onclick="submitWorkout()">Save Workout</button>
-        </div>
+            <h3>Sets</h3>
+            <div id="sets-container"></div>
+            
+            <button type="button" onclick="addSetRow()" style="background: #374151; margin-bottom: 12px;">+ Add Set</button>
+            <button type="button" onclick="submitWorkout()">Save Workout</button>
+          </div>
 
-        <!-- History Card -->
-        <div class="card">
-          <h2>Past Workouts</h2>
-          <div id="history-container">Loading past workouts...</div>
+          <div class="card">
+            <h2>Past Workouts</h2>
+            <div id="history-container">Loading past workouts...</div>
+          </div>
         </div>
       </div>
 
       <script>
         let exerciseCatalog = [];
 
-        function toggleRegister() {
-          document.getElementById('register-card').classList.toggle('hidden');
+        function getAuthHeaders() {
+          const token = localStorage.getItem('workout_token');
+          return {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + token
+          };
         }
 
-        async function registerAccount() {
-          const username = document.getElementById('reg-user').value;
-          const password = document.getElementById('reg-pass').value;
-          const res = await fetch('/api/register', {
+        async function handleAuth(endpoint) {
+          const username = document.getElementById('auth-user').value;
+          const password = document.getElementById('auth-pass').value;
+          const res = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password })
           });
           const data = await res.json();
           if (res.ok) {
-            alert(data.message + " Refresh the page and sign in with your new credentials.");
-            toggleRegister();
+            localStorage.setItem('workout_token', data.token);
+            showApp(data.username);
           } else {
-            alert(data.detail || "Registration failed");
+            alert(data.detail || 'Authentication failed');
           }
         }
 
-        async function init() {
-          const meRes = await fetch('/api/me');
-          if (meRes.ok) {
-            const me = await meRes.json();
-            document.getElementById('user-badge').innerText = '@' + me.username;
-          }
-          const res = await fetch('/api/exercises');
+        function logout() {
+          localStorage.removeItem('workout_token');
+          document.getElementById('app-screen').classList.add('hidden');
+          document.getElementById('app-screen').style.display = 'none';
+          document.getElementById('user-controls').classList.add('hidden');
+          document.getElementById('auth-screen').classList.remove('hidden');
+        }
+
+        async function showApp(username) {
+          document.getElementById('auth-screen').classList.add('hidden');
+          document.getElementById('app-screen').classList.remove('hidden');
+          document.getElementById('app-screen').style.display = 'flex';
+          document.getElementById('user-controls').classList.remove('hidden');
+          document.getElementById('user-badge').innerText = '@' + username;
+
+          const res = await fetch('/api/exercises', { headers: getAuthHeaders() });
           exerciseCatalog = await res.json();
+          document.getElementById('sets-container').innerHTML = '';
           addSetRow();
           loadHistory();
+        }
+
+        async function init() {
+          const token = localStorage.getItem('workout_token');
+          if (!token) {
+            document.getElementById('app-screen').style.display = 'none';
+            return;
+          }
+          const meRes = await fetch('/api/me', { headers: getAuthHeaders() });
+          if (meRes.ok) {
+            const me = await meRes.json();
+            showApp(me.username);
+          } else {
+            logout();
+          }
         }
 
         function addSetRow() {
           const container = document.getElementById('sets-container');
           const row = document.createElement('div');
           row.className = 'set-row';
-
           const exerciseSelect = exerciseCatalog.map(e => `<option value="${e.name}">${e.name}</option>`).join('');
-
           row.innerHTML = `
             <select class="set-ex">${exerciseSelect}</select>
             <input type="number" class="set-lbs" placeholder="lbs" step="2.5">
@@ -442,8 +444,8 @@ def serve_ui():
           const title = document.getElementById('workout-title').value;
           const notes = document.getElementById('workout-notes').value;
           const rows = document.querySelectorAll('.set-row');
-
           const sets = [];
+
           rows.forEach((r, idx) => {
             const ex = r.querySelector('.set-ex').value;
             const lbs = parseFloat(r.querySelector('.set-lbs').value) || 0;
@@ -461,7 +463,7 @@ def serve_ui():
 
           const res = await fetch('/api/workouts', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getAuthHeaders(),
             body: JSON.stringify({ title, notes, sets })
           });
 
@@ -476,7 +478,7 @@ def serve_ui():
         }
 
         async function loadHistory() {
-          const res = await fetch('/api/workouts');
+          const res = await fetch('/api/workouts', { headers: getAuthHeaders() });
           const data = await res.json();
           const container = document.getElementById('history-container');
 
