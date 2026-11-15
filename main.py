@@ -1,44 +1,27 @@
+import hashlib
 import os
+import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID, uuid4
+
 from dotenv import load_dotenv
-from sqlmodel import create_engine
-import secrets
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import HTMLResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlmodel import Field, Relationship, Session, SQLModel, create_engine, select
 
-
 load_dotenv()
-# --- 1. Database Configuration (SQLite) ---
 
-security = HTTPBasic()
-
-def verify_auth(credentials: HTTPBasicCredentials = Depends(security)):
-    # Reads from .env / Render Environment Variables, with a fallback default
-    expected_user = os.getenv("APP_USERNAME", "admin")
-    expected_pass = os.getenv("APP_PASSWORD", "changeme123")
-
-    correct_user = secrets.compare_digest(credentials.username, expected_user)
-    correct_pass = secrets.compare_digest(credentials.password, expected_pass)
-
-    if not (correct_user and correct_pass):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unauthorized",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-    return credentials.username
+# --- 1. Database Configuration ---
 
 DATABASE_URL = (
     os.getenv("DATABASE_URL_POOLED")
     or os.getenv("DATABASE_URL")
     or "sqlite:///./workout.db"
 )
+
 # Fix for Render/Neon URLs starting with postgres:// instead of postgresql://
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
@@ -61,7 +44,35 @@ def get_session():
         yield session
 
 
-# --- 2. Database Models ---
+# --- 2. Password Hashing Helpers ---
+
+
+def hash_password(password: str, salt: Optional[str] = None) -> str:
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt.encode("utf-8"), 100_000
+    ).hex()
+    return f"{salt}${digest}"
+
+
+def verify_password(plain_password: str, stored_hash: str) -> bool:
+    try:
+        salt, _ = stored_hash.split("$", 1)
+        return secrets.compare_digest(hash_password(plain_password, salt), stored_hash)
+    except ValueError:
+        return False
+
+
+# --- 3. Database Models ---
+
+
+class User(SQLModel, table=True):
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    username: str = Field(index=True, unique=True)
+    hashed_password: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    workouts: List["WorkoutSession"] = Relationship(back_populates="user")
 
 
 class Exercise(SQLModel, table=True):
@@ -73,12 +84,12 @@ class Exercise(SQLModel, table=True):
 
 class WorkoutSession(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: UUID = Field(foreign_key="user.id", index=True)
     title: str
-    date: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
+    date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     notes: Optional[str] = None
 
+    user: Optional[User] = Relationship(back_populates="workouts")
     sets: List["SetLog"] = Relationship(
         back_populates="workout",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"},
@@ -87,28 +98,46 @@ class WorkoutSession(SQLModel, table=True):
 
 class SetLog(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
-    workout_id: UUID = Field(
-        foreign_key="workoutsession.id", index=True
-    )
+    workout_id: UUID = Field(foreign_key="workoutsession.id", index=True)
     exercise_name: str
     set_number: int
     weight: float
     reps: int
     rpe: Optional[float] = None
 
-    workout: Optional[WorkoutSession] = Relationship(
-        back_populates="sets"
-    )
+    workout: Optional[WorkoutSession] = Relationship(back_populates="sets")
 
 
-# --- 3. App Lifecycle & Initial Data Seed ---
+# --- 4. Authentication Dependency ---
+
+security = HTTPBasic()
+
+
+def get_current_user(
+    credentials: HTTPBasicCredentials = Depends(security),
+    session: Session = Depends(get_session),
+) -> User:
+    user = session.exec(
+        select(User).where(User.username == credentials.username.lower().strip())
+    ).first()
+
+    if not user or not verify_password(credentials.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid username or password",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return user
+
+
+# --- 5. App Lifecycle & Initial Data Seed ---
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     SQLModel.metadata.create_all(engine)
-    # Seed default exercises if table is empty
     with Session(engine) as session:
+        # Seed default exercises if table is empty
         existing = session.exec(select(Exercise)).first()
         if not existing:
             default_exercises = [
@@ -150,20 +179,60 @@ async def lifespan(app: FastAPI):
             ]
             session.add_all(default_exercises)
             session.commit()
+
+        # Seed initial admin user from .env / Render Environment Variables if no users exist
+        if not session.exec(select(User)).first():
+            init_user = os.getenv("APP_USERNAME", "admin").lower().strip()
+            init_pass = os.getenv("APP_PASSWORD", "changeme123")
+            session.add(
+                User(username=init_user, hashed_password=hash_password(init_pass))
+            )
+            session.commit()
     yield
 
 
-app = FastAPI(
-    title="Workout Tracker",
-    lifespan=lifespan,
-    dependencies=[Depends(verify_auth)],
-)
+app = FastAPI(title="Workout Tracker", lifespan=lifespan)
 
-# --- 4. API Endpoints ---
+# --- 6. API Endpoints ---
+
+
+class UserRegister(SQLModel):
+    username: str
+    password: str
+
+
+@app.post("/api/register", status_code=status.HTTP_201_CREATED)
+def register_user(payload: UserRegister, session: Session = Depends(get_session)):
+    clean_username = payload.username.lower().strip()
+    if len(clean_username) < 3 or len(payload.password) < 6:
+        raise HTTPException(
+            status_code=400,
+            detail="Username must be at least 3 chars and password at least 6 chars.",
+        )
+
+    existing = session.exec(select(User).where(User.username == clean_username)).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Username already taken.")
+
+    new_user = User(
+        username=clean_username,
+        hashed_password=hash_password(payload.password),
+    )
+    session.add(new_user)
+    session.commit()
+    return {"message": f"Account '{clean_username}' created!"}
+
+
+@app.get("/api/me")
+def get_me(current_user: User = Depends(get_current_user)):
+    return {"id": str(current_user.id), "username": current_user.username}
 
 
 @app.get("/api/exercises", response_model=List[Exercise])
-def get_exercises(session: Session = Depends(get_session)):
+def get_exercises(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
     return session.exec(select(Exercise)).all()
 
 
@@ -183,9 +252,15 @@ class WorkoutCreate(SQLModel):
 
 @app.post("/api/workouts", response_model=WorkoutSession)
 def save_workout(
-    payload: WorkoutCreate, session: Session = Depends(get_session)
+    payload: WorkoutCreate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
 ):
-    workout = WorkoutSession(title=payload.title, notes=payload.notes)
+    workout = WorkoutSession(
+        user_id=current_user.id,
+        title=payload.title,
+        notes=payload.notes,
+    )
     session.add(workout)
     session.commit()
     session.refresh(workout)
@@ -207,9 +282,14 @@ def save_workout(
 
 
 @app.get("/api/workouts")
-def list_workouts(session: Session = Depends(get_session)):
+def list_workouts(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
     workouts = session.exec(
-        select(WorkoutSession).order_by(WorkoutSession.date.desc())
+        select(WorkoutSession)
+        .where(WorkoutSession.user_id == current_user.id)
+        .order_by(WorkoutSession.date.desc())
     ).all()
     results = []
     for w in workouts:
@@ -234,7 +314,7 @@ def list_workouts(session: Session = Depends(get_session)):
     return results
 
 
-# --- 5. Front-End Web Interface ---
+# --- 7. Front-End Web Interface ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -252,6 +332,7 @@ def serve_ui():
         body { background: var(--bg); color: var(--text); margin: 0; padding: 16px; display: flex; justify-content: center; }
         .container { width: 100%; max-width: 600px; display: flex; flex-direction: column; gap: 16px; }
         .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+        .header-bar { display: flex; justify-content: space-between; align-items: center; }
         h1, h2, h3 { margin: 0 0 12px 0; }
         input, select, textarea, button { width: 100%; padding: 10px; margin-bottom: 8px; border-radius: 6px; border: 1px solid var(--border); background: #2a2a2a; color: var(--text); font-size: 15px; }
         button { background: var(--accent); color: white; border: none; font-weight: 600; cursor: pointer; }
@@ -259,14 +340,30 @@ def serve_ui():
         .set-row { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; gap: 6px; align-items: center; margin-bottom: 8px; }
         .set-row input, .set-row select { margin: 0; }
         .btn-del { background: #dc2626; padding: 8px 12px; width: auto; }
+        .btn-small { width: auto; padding: 6px 12px; font-size: 13px; background: #374151; }
         .history-item { border-bottom: 1px solid var(--border); padding: 12px 0; }
         .history-item:last-child { border: none; }
         .badge { font-size: 12px; background: #333; padding: 2px 6px; border-radius: 4px; color: var(--muted); }
+        .hidden { display: none; }
       </style>
     </head>
     <body>
       <div class="container">
-        <h1>🏋️ Workout Logger</h1>
+        <div class="header-bar">
+          <h1>🏋️ Workout Logger</h1>
+          <div>
+            <span id="user-badge" class="badge" style="margin-right:6px;"></span>
+            <button class="btn-small" onclick="toggleRegister()">+ New Account</button>
+          </div>
+        </div>
+
+        <!-- Account Creation Card (Hidden by default) -->
+        <div id="register-card" class="card hidden">
+          <h2>Create New Account</h2>
+          <input type="text" id="reg-user" placeholder="New username (min 3 chars)">
+          <input type="password" id="reg-pass" placeholder="New password (min 6 chars)">
+          <button onclick="registerAccount()">Create Account</button>
+        </div>
 
         <!-- Workout Logger Card -->
         <div class="card">
@@ -291,7 +388,33 @@ def serve_ui():
       <script>
         let exerciseCatalog = [];
 
+        function toggleRegister() {
+          document.getElementById('register-card').classList.toggle('hidden');
+        }
+
+        async function registerAccount() {
+          const username = document.getElementById('reg-user').value;
+          const password = document.getElementById('reg-pass').value;
+          const res = await fetch('/api/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+          });
+          const data = await res.json();
+          if (res.ok) {
+            alert(data.message + " Refresh the page and sign in with your new credentials.");
+            toggleRegister();
+          } else {
+            alert(data.detail || "Registration failed");
+          }
+        }
+
         async function init() {
+          const meRes = await fetch('/api/me');
+          if (meRes.ok) {
+            const me = await meRes.json();
+            document.getElementById('user-badge').innerText = '@' + me.username;
+          }
           const res = await fetch('/api/exercises');
           exerciseCatalog = await res.json();
           addSetRow();
@@ -370,7 +493,7 @@ def serve_ui():
               </div>
               ${w.notes ? `<p style="font-size:13px; color:var(--muted); margin:4px 0;">${w.notes}</p>` : ''}
               <ul style="margin: 6px 0 0 16px; padding:0; font-size:14px;">
-                ${w.sets.map(s => `<li>${s.exercise}:${s.weight} lbs × ${s.reps} reps${s.rpe ? `(@ RPE ${s.rpe})` : ''}</li>`).join('')}
+                ${w.sets.map(s => `<li>${s.exercise}: ${s.weight} lbs × ${s.reps} reps ${s.rpe ? `(@ RPE ${s.rpe})` : ''}</li>`).join('')}
               </ul>
             </div>
           `).join('');
