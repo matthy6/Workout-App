@@ -265,6 +265,57 @@ def get_exercises(
     return sorted(combined, key=lambda x: x["name"].lower())
 
 
+# --- Exercise History Endpoint ---
+
+
+@app.get("/api/exercises/history")
+def get_exercise_history(
+    name: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    clean_target = name.strip().lower()
+    if not clean_target:
+        return []
+
+    # Find all set logs matching this exercise name for the current user, ordered by workout date desc
+    sets = session.exec(
+        select(SetLog, WorkoutSession)
+        .join(WorkoutSession)
+        .where(
+            WorkoutSession.user_id == current_user.id,
+        )
+        .order_by(WorkoutSession.date.desc())
+    ).all()
+
+    # Group by workout session
+    history_map = {}
+    for set_log, workout in sets:
+        if set_log.exercise_name.strip().lower() == clean_target:
+            if workout.id not in history_map:
+                history_map[workout.id] = {
+                    "workout_title": workout.title,
+                    "date": workout.date.strftime("%Y-%m-%d"),
+                    "started_at": workout.started_at.isoformat() if workout.started_at else None,
+                    "sets": []
+                }
+            history_map[workout.id]["sets"].append({
+                "set_number": set_log.set_number,
+                "weight": set_log.weight,
+                "reps": set_log.reps,
+                "rpe": set_log.rpe,
+                "notes": set_log.notes
+            })
+
+    # Sort each session's sets by set number
+    results = []
+    for w_data in history_map.values():
+        w_data["sets"] = sorted(w_data["sets"], key=lambda x: x["set_number"])
+        results.append(w_data)
+
+    return results
+
+
 # --- Template Endpoints ---
 
 
@@ -482,7 +533,7 @@ def list_workouts(
     return results
 
 
-# --- 7. Web Interface with Tab Navigation ---
+# --- 7. Web Interface with Exercise History Tab ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -506,8 +557,8 @@ def serve_ui():
         input, select, textarea, button { width: 100%; padding: 10px; margin-bottom: 8px; border-radius: 6px; border: 1px solid var(--border); background: #2a2a2a; color: var(--text); font-size: 15px; }
         button { background: var(--accent); color: white; border: none; font-weight: 600; cursor: pointer; }
         button:hover { opacity: 0.9; }
-        .tab-bar { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; background: var(--card); padding: 6px; border-radius: 10px; border: 1px solid var(--border); }
-        .tab-btn { margin: 0; padding: 10px; font-size: 14px; background: transparent; color: var(--muted); border-radius: 7px; transition: background 0.15s, color 0.15s; }
+        .tab-bar { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; background: var(--card); padding: 6px; border-radius: 10px; border: 1px solid var(--border); }
+        .tab-btn { margin: 0; padding: 8px 4px; font-size: 13px; background: transparent; color: var(--muted); border-radius: 7px; text-align: center; transition: background 0.15s, color 0.15s; }
         .tab-btn.active { background: var(--accent); color: white; }
         .template-bar { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; background: #262626; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid var(--border); }
         .template-bar select { margin: 0; font-size: 14px; padding: 8px; }
@@ -551,8 +602,9 @@ def serve_ui():
           
           <!-- Navigation Tabs -->
           <div class="tab-bar">
-            <button type="button" id="tab-btn-log" class="tab-btn active" onclick="switchTab('log')">Log Session</button>
-            <button type="button" id="tab-btn-history" class="tab-btn" onclick="switchTab('history')">Past Workouts <span id="history-count"></span></button>
+            <button type="button" id="tab-btn-log" class="tab-btn active" onclick="switchTab('log')">Log</button>
+            <button type="button" id="tab-btn-history" class="tab-btn" onclick="switchTab('history')">History <span id="history-count"></span></button>
+            <button type="button" id="tab-btn-exercises" class="tab-btn" onclick="switchTab('exercises')">Exercises</button>
           </div>
 
           <!-- Tab 1: Active Workout Logger -->
@@ -610,6 +662,18 @@ def serve_ui():
             <div id="history-container">Loading past workouts...</div>
           </div>
 
+          <!-- Tab 3: Exercise Performance History -->
+          <div id="tab-exercises" class="card hidden">
+            <h2>Exercise Progress</h2>
+            <div style="display:flex; gap:6px; margin-bottom:12px;">
+              <input type="text" id="exercise-search-input" list="exercise-options" placeholder="Select or type exercise..." style="margin:0;">
+              <button type="button" class="btn-small" style="background: var(--accent); padding: 0 16px;" onclick="loadExerciseHistory()">View</button>
+            </div>
+            <div id="exercise-history-container">
+              <p style="color: var(--muted)">Select an exercise above to view past performances.</p>
+            </div>
+          </div>
+
         </div>
       </div>
 
@@ -621,19 +685,28 @@ def serve_ui():
         function switchTab(tabName) {
           const logView = document.getElementById('tab-log');
           const historyView = document.getElementById('tab-history');
+          const exercisesView = document.getElementById('tab-exercises');
+          
           const logBtn = document.getElementById('tab-btn-log');
           const historyBtn = document.getElementById('tab-btn-history');
+          const exercisesBtn = document.getElementById('tab-btn-exercises');
+
+          logView.classList.add('hidden');
+          historyView.classList.add('hidden');
+          exercisesView.classList.add('hidden');
+          logBtn.classList.remove('active');
+          historyBtn.classList.remove('active');
+          exercisesBtn.classList.remove('active');
 
           if (tabName === 'history') {
-            logView.classList.add('hidden');
             historyView.classList.remove('hidden');
-            logBtn.classList.remove('active');
             historyBtn.classList.add('active');
             loadHistory();
+          } else if (tabName === 'exercises') {
+            exercisesView.classList.remove('hidden');
+            exercisesBtn.classList.add('active');
           } else {
-            historyView.classList.add('hidden');
             logView.classList.remove('hidden');
-            historyBtn.classList.remove('active');
             logBtn.classList.add('active');
           }
         }
@@ -965,6 +1038,51 @@ def serve_ui():
                 ${w.sets.map(s => `
                   <li style="margin-bottom:4px;">
                     ${s.exercise}: ${s.weight} lbs × ${s.reps} reps ${s.rpe ? `(@ RPE ${s.rpe})` : ''}
+                    ${s.notes ? `<div style="font-size:12px; color:var(--muted); margin-top:2px;">↳ ${s.notes}</div>` : ''}
+                  </li>
+                `).join('')}
+              </ul>
+            </div>
+          `).join('');
+        }
+
+        async function loadExerciseHistory() {
+          const exerciseName = document.getElementById('exercise-search-input').value.trim();
+          const container = document.getElementById('exercise-history-container');
+
+          if (!exerciseName) {
+            container.innerHTML = '<p style="color: var(--muted)">Please select or type an exercise name.</p>';
+            return;
+          }
+
+          container.innerHTML = '<p style="color: var(--muted)">Loading performance history...</p>';
+
+          const res = await fetch(`/api/exercises/history?name=${encodeURIComponent(exerciseName)}`, {
+            headers: getAuthHeaders()
+          });
+
+          if (!res.ok) {
+            container.innerHTML = '<p style="color: #dc2626;">Failed to load exercise history.</p>';
+            return;
+          }
+
+          const history = await res.json();
+
+          if (history.length === 0) {
+            container.innerHTML = `<p style="color: var(--muted)">No recorded performances found for "${exerciseName}".</p>`;
+            return;
+          }
+
+          container.innerHTML = history.map(h => `
+            <div class="history-item">
+              <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+                <strong>${h.workout_title}</strong>
+                <span class="badge">${h.date}</span>
+              </div>
+              <ul style="margin: 6px 0 0 16px; padding:0; font-size:14px;">
+                ${h.sets.map(s => `
+                  <li style="margin-bottom:4px;">
+                    Set ${s.set_number}: <strong>${s.weight} lbs</strong> × <strong>${s.reps} reps</strong> ${s.rpe ? `(@ RPE ${s.rpe})` : ''}
                     ${s.notes ? `<div style="font-size:12px; color:var(--muted); margin-top:2px;">↳ ${s.notes}</div>` : ''}
                   </li>
                 `).join('')}
