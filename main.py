@@ -302,7 +302,6 @@ def resolve_user_split(user: User, session: Session) -> dict:
     ).all()
     valid_map = {str(t.id): t for t in user_templates}
 
-    # Filter out any deleted templates while preserving order & duplicates (e.g. PPLPPL)
     clean_ids = [tid for tid in raw_ids if tid in valid_map]
     idx = user.split_index or 0
     if clean_ids:
@@ -695,6 +694,55 @@ def create_template(
     return {"status": "created", "template_id": str(template.id)}
 
 
+@app.put("/api/templates/{template_id}")
+def update_template(
+    template_id: UUID,
+    payload: TemplateCreate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    template = session.exec(
+        select(WorkoutTemplate).where(
+            WorkoutTemplate.id == template_id,
+            WorkoutTemplate.user_id == current_user.id,
+        )
+    ).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found.")
+
+    clean_name = payload.name.strip()
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Template name is required.")
+    if not payload.sets:
+        raise HTTPException(
+            status_code=400, detail="Add at least one exercise row to save a template."
+        )
+
+    template.name = clean_name
+    template.notes = payload.notes.strip() if payload.notes else None
+
+    for existing_set in template.sets:
+        session.delete(existing_set)
+    session.commit()
+
+    for item in payload.sets:
+        session.add(
+            TemplateSet(
+                template_id=template.id,
+                exercise_name=item.exercise_name.strip(),
+                set_number=item.set_number,
+                weight=str(item.weight),
+                weight_unit=item.weight_unit or "lbs",
+                reps=item.reps,
+                rpe=item.rpe,
+                notes=item.notes.strip() if item.notes else None,
+            )
+        )
+
+    session.commit()
+    return {"status": "updated", "template_id": str(template.id)}
+
+
 @app.get("/api/templates")
 def list_templates(
     current_user: User = Depends(get_current_user),
@@ -812,7 +860,6 @@ def save_workout(
             )
         )
 
-    # Advance split rotation index if user has an active split configured
     split_state = resolve_user_split(current_user, session)
     if split_state["template_ids"]:
         current_user.split_index = (split_state["current_index"] + 1) % len(
@@ -938,7 +985,7 @@ def list_workouts(
     return results
 
 
-# --- 7. Web Interface with Workout Split Auto-Loader ---
+# --- 7. Web Interface with Template Manager & Split Auto-Loader ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -962,7 +1009,7 @@ def serve_ui():
         input, select, textarea, button { width: 100%; padding: 10px; margin-bottom: 8px; border-radius: 6px; border: 1px solid var(--border); background: #2a2a2a; color: var(--text); font-size: 15px; }
         button { background: var(--accent); color: white; border: none; font-weight: 600; cursor: pointer; }
         button:hover { opacity: 0.9; }
-        .tab-bar { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; background: var(--card); padding: 6px; border-radius: 10px; border: 1px solid var(--border); }
+        .tab-bar { display: grid; grid-template-columns: repeat(6, 1fr); gap: 3px; background: var(--card); padding: 6px; border-radius: 10px; border: 1px solid var(--border); }
         .tab-btn { margin: 0; padding: 8px 1px; font-size: 11px; background: transparent; color: var(--muted); border-radius: 7px; text-align: center; transition: background 0.15s, color 0.15s; }
         .tab-btn.active { background: var(--accent); color: white; }
         .template-bar { display: grid; grid-template-columns: 1fr auto auto auto; gap: 6px; align-items: center; background: #262626; padding: 10px 12px; border-radius: 8px; margin-bottom: 10px; border: 1px solid var(--border); }
@@ -1048,6 +1095,7 @@ def serve_ui():
           <!-- Navigation Tabs -->
           <div class="tab-bar">
             <button type="button" id="tab-btn-log" class="tab-btn active" onclick="switchTab('log')">Log</button>
+            <button type="button" id="tab-btn-templates" class="tab-btn" onclick="switchTab('templates')">Templates</button>
             <button type="button" id="tab-btn-nutrition" class="tab-btn" onclick="switchTab('nutrition')">Nutrition</button>
             <button type="button" id="tab-btn-nut-history" class="tab-btn" onclick="switchTab('nut-history')">Diet Hist</button>
             <button type="button" id="tab-btn-history" class="tab-btn" onclick="switchTab('history')">Workouts</button>
@@ -1131,7 +1179,7 @@ def serve_ui():
             <div id="exercises-container"></div>
             
             <div class="action-row">
-              <button type="button" onclick="addExerciseBlock()" style="background: #374151;">+ Add Exercise</button>
+              <button type="button" onclick="addExerciseBlock('exercises-container')" style="background: #374151;">+ Add Exercise</button>
               <button type="button" onclick="saveAsTemplate()" style="background: #4b5563;">📋 Save as Template</button>
             </div>
             
@@ -1140,7 +1188,42 @@ def serve_ui():
             </div>
           </div>
 
-          <!-- Tab 2: Nutrition & Calorie Tracker -->
+          <!-- Tab 2: Manage Workout Templates -->
+          <div id="tab-templates" class="card hidden">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+              <h2 style="margin:0;">Workout Templates</h2>
+              <button type="button" id="new-template-btn" class="btn-small" style="background: var(--green);" onclick="startNewTemplate()">+ New Template</button>
+            </div>
+
+            <!-- Inline Template Editor Form -->
+            <div id="template-editor-box" class="split-panel hidden" style="margin-bottom:16px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <strong id="template-editor-heading" style="font-size:15px;">Edit Template</strong>
+                <button type="button" class="btn-icon" onclick="closeTemplateEditor()">Cancel</button>
+              </div>
+
+              <label for="tpl-edit-name">Template Name</label>
+              <input type="text" id="tpl-edit-name" placeholder="e.g. Push Day A">
+
+              <label for="tpl-edit-notes">Default Notes (optional)</label>
+              <textarea id="tpl-edit-notes" placeholder="Template notes..." rows="2"></textarea>
+
+              <h3 style="font-size:14px; margin-top:6px;">Exercises & Target Sets</h3>
+              <div id="template-exercises-container"></div>
+
+              <div class="action-row" style="margin-top:8px;">
+                <button type="button" onclick="addExerciseBlock('template-exercises-container')" style="background: #374151;">+ Add Exercise</button>
+                <button type="button" onclick="saveTemplateEditor()" style="background: var(--green);">💾 Save Template</button>
+              </div>
+            </div>
+
+            <!-- Saved Templates List -->
+            <div id="templates-list-container">
+              <p style="color: var(--muted);">Loading templates...</p>
+            </div>
+          </div>
+
+          <!-- Tab 3: Nutrition & Calorie Tracker -->
           <div id="tab-nutrition" class="card hidden">
             <h2>Calorie & Macro Tracker</h2>
             
@@ -1207,19 +1290,19 @@ def serve_ui():
             </div>
           </div>
 
-          <!-- Tab 3: Nutrition History -->
+          <!-- Tab 4: Nutrition History -->
           <div id="tab-nut-history" class="card hidden">
             <h2>Nutrition History</h2>
             <div id="nutrition-history-container">Loading diet history...</div>
           </div>
 
-          <!-- Tab 4: Past Workouts History -->
+          <!-- Tab 5: Past Workouts History -->
           <div id="tab-history" class="card hidden">
             <h2>Past Workouts</h2>
             <div id="history-container">Loading past workouts...</div>
           </div>
 
-          <!-- Tab 5: Exercise Performance History -->
+          <!-- Tab 6: Exercise Performance History -->
           <div id="tab-exercises" class="card hidden">
             <h2>Exercise Progress</h2>
             <div style="display:flex; gap:6px; margin-bottom:12px;">
@@ -1244,6 +1327,7 @@ def serve_ui():
         let draftSplitIndex = 0;
         let timerInterval = null;
         let editingWorkoutId = null;
+        let editingTemplateId = null;
         let modalTimeout = null;
 
         function showSuccessModal(title, message) {
@@ -1264,48 +1348,24 @@ def serve_ui():
         }
 
         function switchTab(tabName) {
-          const logView = document.getElementById('tab-log');
-          const nutView = document.getElementById('tab-nutrition');
-          const nutHistView = document.getElementById('tab-nut-history');
-          const historyView = document.getElementById('tab-history');
-          const exercisesView = document.getElementById('tab-exercises');
-          
-          const logBtn = document.getElementById('tab-btn-log');
-          const nutBtn = document.getElementById('tab-btn-nutrition');
-          const nutHistBtn = document.getElementById('tab-btn-nut-history');
-          const historyBtn = document.getElementById('tab-btn-history');
-          const exercisesBtn = document.getElementById('tab-btn-exercises');
+          const tabs = ['log', 'templates', 'nutrition', 'nut-history', 'history', 'exercises'];
+          tabs.forEach(t => {
+            document.getElementById(`tab-${t}`).classList.add('hidden');
+            document.getElementById(`tab-btn-${t}`).classList.remove('active');
+          });
 
-          logView.classList.add('hidden');
-          nutView.classList.add('hidden');
-          nutHistView.classList.add('hidden');
-          historyView.classList.add('hidden');
-          exercisesView.classList.add('hidden');
-          logBtn.classList.remove('active');
-          nutBtn.classList.remove('active');
-          nutHistBtn.classList.remove('active');
-          historyBtn.classList.remove('active');
-          exercisesBtn.classList.remove('active');
+          document.getElementById(`tab-${tabName}`).classList.remove('hidden');
+          document.getElementById(`tab-btn-${tabName}`).classList.add('active');
 
-          if (tabName === 'nutrition') {
-            nutView.classList.remove('hidden');
-            nutBtn.classList.add('active');
+          if (tabName === 'templates') {
+            renderTemplatesManagerList();
+          } else if (tabName === 'nutrition') {
             loadNutrition();
             refreshSavedFoods();
           } else if (tabName === 'nut-history') {
-            nutHistView.classList.remove('hidden');
-            nutHistBtn.classList.add('active');
             loadNutritionHistory();
           } else if (tabName === 'history') {
-            historyView.classList.remove('hidden');
-            historyBtn.classList.add('active');
             loadHistory();
-          } else if (tabName === 'exercises') {
-            exercisesView.classList.remove('hidden');
-            exercisesBtn.classList.add('active');
-          } else {
-            logView.classList.remove('hidden');
-            logBtn.classList.add('active');
           }
         }
 
@@ -1477,8 +1537,8 @@ def serve_ui():
           }
         }
 
-        function addExerciseBlock(exerciseName = '', setsPrefill = []) {
-          const container = document.getElementById('exercises-container');
+        function addExerciseBlock(containerId = 'exercises-container', exerciseName = '', setsPrefill = []) {
+          const container = document.getElementById(containerId);
           const card = document.createElement('div');
           card.className = 'exercise-card';
 
@@ -1501,8 +1561,9 @@ def serve_ui():
           }
         }
 
-        function collectFlattenedSets(requireReps = true) {
-          const exerciseCards = document.querySelectorAll('.exercise-card');
+        function collectFlattenedSets(containerId = 'exercises-container', requireReps = true) {
+          const container = document.getElementById(containerId);
+          const exerciseCards = container.querySelectorAll('.exercise-card');
           const flattened = [];
           let globalSetCounter = 1;
 
@@ -1550,6 +1611,177 @@ def serve_ui():
               '<option value="">-- Select a Workout Template --</option>' + optionsHtml;
             document.getElementById('split-add-select').innerHTML =
               '<option value="">-- Choose template to add --</option>' + optionsHtml;
+
+            renderTemplatesManagerList();
+          }
+        }
+
+        // --- Templates Manager (View / Edit / Delete) ---
+
+        function renderTemplatesManagerList() {
+          const container = document.getElementById('templates-list-container');
+          if (!container) return;
+
+          if (savedTemplates.length === 0) {
+            container.innerHTML = '<p style="color: var(--muted);">No saved templates yet. Create one above or save a session from the Log tab.</p>';
+            return;
+          }
+
+          container.innerHTML = savedTemplates.map(t => {
+            const grouped = [];
+            t.sets.forEach(s => {
+              const last = grouped[grouped.length - 1];
+              if (last && last.exercise_name.toLowerCase() === s.exercise_name.toLowerCase()) {
+                last.sets.push(s);
+              } else {
+                grouped.push({ exercise_name: s.exercise_name, sets: [s] });
+              }
+            });
+
+            return `
+              <div class="history-item">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:6px;">
+                  <div>
+                    <strong style="font-size:16px;">${t.name}</strong>
+                    <span class="badge" style="margin-left:6px;">${t.sets.length} sets</span>
+                  </div>
+                  <div style="display:flex; gap:6px;">
+                    <button type="button" class="btn-small" style="background: var(--accent); padding:6px 10px; font-size:12px;" onclick="loadTemplateFromManager('${t.id}')">▶ Load</button>
+                    <button type="button" class="btn-edit" onclick="editTemplate('${t.id}')">✏️ Edit</button>
+                    <button type="button" class="btn-delete-workout" onclick="deleteTemplateById('${t.id}')">🗑️ Delete</button>
+                  </div>
+                </div>
+                ${t.notes ? `<p style="font-size:13px; color:var(--muted); margin:4px 0;">${t.notes}</p>` : ''}
+                <div style="margin-top:8px;">
+                  ${grouped.map(g => `
+                    <div style="margin-bottom:6px;">
+                      <div style="font-weight:600; font-size:14px;">${g.exercise_name}</div>
+                      <ul style="margin:2px 0 0 18px; padding:0; font-size:13px; color:#d1d5db;">
+                        ${g.sets.map((s, idx) => {
+                          const unitDisplay = s.weight_unit === 'plate' ? 'plate' : (s.weight_unit || 'lbs');
+                          const weightStr = s.weight ? `${s.weight} ${unitDisplay}` : 'Bodyweight / Blank';
+                          const repsStr = s.reps ? ` × ${s.reps} reps` : '';
+                          return `
+                            <li style="margin-bottom:2px;">
+                              Set ${idx + 1}: ${weightStr}${repsStr} ${s.rpe ? `(@ RPE ${s.rpe})` : ''}
+                              ${s.notes ? `<span style="color:var(--muted);"> — ${s.notes}</span>` : ''}
+                            </li>
+                          `;
+                        }).join('')}
+                      </ul>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            `;
+          }).join('');
+        }
+
+        function loadTemplateFromManager(templateId) {
+          switchTab('log');
+          applyTemplateById(templateId, true);
+        }
+
+        function startNewTemplate() {
+          editingTemplateId = null;
+          document.getElementById('template-editor-heading').innerText = 'Create New Template';
+          document.getElementById('tpl-edit-name').value = '';
+          document.getElementById('tpl-edit-notes').value = '';
+          document.getElementById('template-exercises-container').innerHTML = '';
+          addExerciseBlock('template-exercises-container');
+          document.getElementById('template-editor-box').classList.remove('hidden');
+        }
+
+        function editTemplate(templateId) {
+          const tpl = savedTemplates.find(t => t.id === templateId);
+          if (!tpl) return;
+
+          editingTemplateId = tpl.id;
+          document.getElementById('template-editor-heading').innerText = `Edit Template: ${tpl.name}`;
+          document.getElementById('tpl-edit-name').value = tpl.name;
+          document.getElementById('tpl-edit-notes').value = tpl.notes || '';
+          document.getElementById('template-exercises-container').innerHTML = '';
+
+          if (tpl.sets.length === 0) {
+            addExerciseBlock('template-exercises-container');
+          } else {
+            const groups = [];
+            tpl.sets.forEach(s => {
+              const last = groups[groups.length - 1];
+              if (last && last.exercise_name.toLowerCase() === s.exercise_name.toLowerCase()) {
+                last.sets.push(s);
+              } else {
+                groups.push({ exercise_name: s.exercise_name, sets: [s] });
+              }
+            });
+            groups.forEach(g => addExerciseBlock('template-exercises-container', g.exercise_name, g.sets));
+          }
+
+          document.getElementById('template-editor-box').classList.remove('hidden');
+          document.getElementById('template-editor-box').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function closeTemplateEditor() {
+          editingTemplateId = null;
+          document.getElementById('template-editor-box').classList.add('hidden');
+          document.getElementById('template-exercises-container').innerHTML = '';
+        }
+
+        async function saveTemplateEditor() {
+          const name = document.getElementById('tpl-edit-name').value.trim();
+          const notes = document.getElementById('tpl-edit-notes').value.trim() || null;
+          const sets = collectFlattenedSets('template-exercises-container', false);
+
+          if (!name) {
+            alert('Template name is required.');
+            return;
+          }
+          if (sets.length === 0) {
+            alert('Add at least one exercise before saving.');
+            return;
+          }
+
+          const endpoint = editingTemplateId ? `/api/templates/${editingTemplateId}` : '/api/templates';
+          const method = editingTemplateId ? 'PUT' : 'POST';
+
+          const res = await fetch(endpoint, {
+            method: method,
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ name, notes, sets })
+          });
+
+          if (res.ok) {
+            const wasEditing = editingTemplateId !== null;
+            closeTemplateEditor();
+            await refreshTemplates();
+            await refreshExerciseOptions();
+            await refreshSplit();
+            showSuccessModal(
+              wasEditing ? 'Template Updated! ✏️' : 'Template Created! 🎉',
+              `Routine "${name}" has been saved.`
+            );
+          } else {
+            const err = await res.json();
+            alert(err.detail || 'Failed to save template.');
+          }
+        }
+
+        async function deleteTemplateById(templateId) {
+          const tpl = savedTemplates.find(t => t.id === templateId);
+          if (!confirm(`Delete template "${tpl ? tpl.name : 'selected'}"?`)) return;
+
+          const res = await fetch(`/api/templates/${templateId}`, {
+            method: 'DELETE',
+            headers: getAuthHeaders()
+          });
+
+          if (res.ok) {
+            if (editingTemplateId === templateId) closeTemplateEditor();
+            await refreshTemplates();
+            await refreshSplit();
+            showSuccessModal('Template Deleted', 'The workout template has been removed.');
+          } else {
+            alert('Failed to delete template.');
           }
         }
 
@@ -1563,7 +1795,7 @@ def serve_ui():
           document.getElementById('exercises-container').innerHTML = '';
 
           if (tpl.sets.length === 0) {
-            addExerciseBlock();
+            addExerciseBlock('exercises-container');
             return true;
           }
 
@@ -1577,7 +1809,7 @@ def serve_ui():
             }
           });
 
-          groups.forEach(g => addExerciseBlock(g.exercise_name, g.sets));
+          groups.forEach(g => addExerciseBlock('exercises-container', g.exercise_name, g.sets));
           if (notify) {
             showSuccessModal('Template Loaded', `Successfully loaded template "${tpl.name}".`);
           }
@@ -1767,7 +1999,7 @@ def serve_ui():
           if (!templateName || !templateName.trim()) return;
 
           const notes = document.getElementById('workout-notes').value.trim() || null;
-          const sets = collectFlattenedSets(false);
+          const sets = collectFlattenedSets('exercises-container', false);
 
           if (sets.length === 0) {
             alert('Enter at least one exercise name before saving a template.');
@@ -1797,21 +2029,7 @@ def serve_ui():
         async function deleteSelectedTemplate() {
           const templateId = document.getElementById('template-select').value;
           if (!templateId) return;
-          const tpl = savedTemplates.find(t => t.id === templateId);
-          if (!confirm(`Delete template "${tpl ? tpl.name : 'selected'}"?`)) return;
-
-          const res = await fetch(`/api/templates/${templateId}`, {
-            method: 'DELETE',
-            headers: getAuthHeaders()
-          });
-
-          if (res.ok) {
-            await refreshTemplates();
-            await refreshSplit();
-            showSuccessModal('Template Deleted', 'The workout template has been removed.');
-          } else {
-            alert('Failed to delete template.');
-          }
+          await deleteTemplateById(templateId);
         }
 
         function resetLoggerToNextWorkout() {
@@ -1826,7 +2044,7 @@ def serve_ui():
           document.getElementById('template-select').value = '';
           document.getElementById('workout-title').value = 'Workout Session';
           document.getElementById('exercises-container').innerHTML = '';
-          addExerciseBlock();
+          addExerciseBlock('exercises-container');
         }
 
         async function showApp(username) {
@@ -1866,7 +2084,7 @@ def serve_ui():
           const startedAt = startVal ? new Date(startVal).toISOString() : null;
           const endedAt = endVal ? new Date(endVal).toISOString() : new Date().toISOString();
 
-          const sets = collectFlattenedSets(true);
+          const sets = collectFlattenedSets('exercises-container', true);
 
           if (sets.length === 0) {
             alert('Please enter an exercise name and reps for at least one set.');
@@ -1974,7 +2192,7 @@ def serve_ui():
             }
           });
 
-          groups.forEach(g => addExerciseBlock(g.exercise, g.sets));
+          groups.forEach(g => addExerciseBlock('exercises-container', g.exercise, g.sets));
           switchTab('log');
           showSuccessModal('Edit Mode', 'Workout loaded into logger for updating.');
         }
