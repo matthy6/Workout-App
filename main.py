@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.responses import HTMLResponse
+from sqlalchemy import Column, JSON, text
 from sqlmodel import Field, Relationship, Session, SQLModel, create_engine, select
 
 load_dotenv()
@@ -65,6 +66,8 @@ class User(SQLModel, table=True):
     hashed_password: str
     auth_token: Optional[str] = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    split_template_ids: List[str] = Field(default_factory=list, sa_column=Column(JSON))
+    split_index: int = Field(default=0)
 
     workouts: List["WorkoutSession"] = Relationship(back_populates="user")
     templates: List["WorkoutTemplate"] = Relationship(back_populates="user")
@@ -189,9 +192,28 @@ def get_current_user(
 # --- 5. App Lifecycle & Seed Data ---
 
 
+def run_safe_migrations():
+    """Ensure new split columns exist on existing SQLite/PostgreSQL user tables."""
+    with engine.begin() as conn:
+        if "sqlite" in DATABASE_URL:
+            cols = [row[1] for row in conn.execute(text("PRAGMA table_info(user)")).fetchall()]
+            if "split_template_ids" not in cols:
+                conn.execute(text("ALTER TABLE user ADD COLUMN split_template_ids TEXT DEFAULT '[]'"))
+            if "split_index" not in cols:
+                conn.execute(text("ALTER TABLE user ADD COLUMN split_index INTEGER DEFAULT 0"))
+        else:
+            conn.execute(
+                text('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS split_template_ids JSON DEFAULT \'[]\'::json')
+            )
+            conn.execute(
+                text('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS split_index INTEGER DEFAULT 0')
+            )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     SQLModel.metadata.create_all(engine)
+    run_safe_migrations()
     with Session(engine) as session:
         if not session.exec(select(Exercise)).first():
             default_exercises = [
@@ -263,6 +285,81 @@ def login_user(payload: AuthPayload, session: Session = Depends(get_session)):
 @app.get("/api/me")
 def get_me(current_user: User = Depends(get_current_user)):
     return {"id": str(current_user.id), "username": current_user.username}
+
+
+# --- Workout Split Endpoints ---
+
+
+class SplitUpdatePayload(SQLModel):
+    template_ids: List[str]
+    current_index: Optional[int] = 0
+
+
+def resolve_user_split(user: User, session: Session) -> dict:
+    raw_ids = user.split_template_ids or []
+    user_templates = session.exec(
+        select(WorkoutTemplate).where(WorkoutTemplate.user_id == user.id)
+    ).all()
+    valid_map = {str(t.id): t for t in user_templates}
+
+    # Filter out any deleted templates while preserving order & duplicates (e.g. PPLPPL)
+    clean_ids = [tid for tid in raw_ids if tid in valid_map]
+    idx = user.split_index or 0
+    if clean_ids:
+        idx = idx % len(clean_ids)
+    else:
+        idx = 0
+
+    if clean_ids != raw_ids or idx != (user.split_index or 0):
+        user.split_template_ids = clean_ids
+        user.split_index = idx
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+
+    next_template_id = clean_ids[idx] if clean_ids else None
+    return {
+        "template_ids": clean_ids,
+        "current_index": idx,
+        "next_template_id": next_template_id,
+    }
+
+
+@app.get("/api/split")
+def get_workout_split(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    return resolve_user_split(current_user, session)
+
+
+@app.put("/api/split")
+def update_workout_split(
+    payload: SplitUpdatePayload,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    user_templates = session.exec(
+        select(WorkoutTemplate).where(WorkoutTemplate.user_id == current_user.id)
+    ).all()
+    valid_ids = {str(t.id) for t in user_templates}
+
+    clean_ids = [tid for tid in payload.template_ids if tid in valid_ids]
+    idx = payload.current_index or 0
+    if clean_ids:
+        idx = idx % len(clean_ids)
+    else:
+        idx = 0
+
+    current_user.split_template_ids = clean_ids
+    current_user.split_index = idx
+    session.add(current_user)
+    session.commit()
+    session.refresh(current_user)
+    return resolve_user_split(current_user, session)
+
+
+# --- Exercise Endpoints ---
 
 
 @app.get("/api/exercises")
@@ -341,6 +438,9 @@ def get_exercise_history(
     return results
 
 
+# --- Nutrition Endpoints ---
+
+
 @app.get("/api/nutrition/foods")
 def get_saved_foods(
     current_user: User = Depends(get_current_user),
@@ -382,7 +482,7 @@ def log_food(
     session: Session = Depends(get_session),
 ):
     clean_name = payload.food_name.strip()
-    
+
     food = FoodLog(
         user_id=current_user.id,
         date=payload.date,
@@ -645,6 +745,7 @@ def delete_template(
 
     session.delete(template)
     session.commit()
+    resolve_user_split(current_user, session)
     return {"status": "deleted"}
 
 
@@ -711,8 +812,21 @@ def save_workout(
             )
         )
 
+    # Advance split rotation index if user has an active split configured
+    split_state = resolve_user_split(current_user, session)
+    if split_state["template_ids"]:
+        current_user.split_index = (split_state["current_index"] + 1) % len(
+            split_state["template_ids"]
+        )
+        session.add(current_user)
+
     session.commit()
-    return {"status": "saved", "workout_id": str(workout.id)}
+    updated_split = resolve_user_split(current_user, session)
+    return {
+        "status": "saved",
+        "workout_id": str(workout.id),
+        "split": updated_split,
+    }
 
 
 @app.put("/api/workouts/{workout_id}")
@@ -824,7 +938,7 @@ def list_workouts(
     return results
 
 
-# --- 7. Web Interface with Confetti Notification Modal & Safe Error Handling ---
+# --- 7. Web Interface with Workout Split Auto-Loader ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -851,8 +965,14 @@ def serve_ui():
         .tab-bar { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; background: var(--card); padding: 6px; border-radius: 10px; border: 1px solid var(--border); }
         .tab-btn { margin: 0; padding: 8px 1px; font-size: 11px; background: transparent; color: var(--muted); border-radius: 7px; text-align: center; transition: background 0.15s, color 0.15s; }
         .tab-btn.active { background: var(--accent); color: white; }
-        .template-bar { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; background: #262626; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid var(--border); }
+        .template-bar { display: grid; grid-template-columns: 1fr auto auto auto; gap: 6px; align-items: center; background: #262626; padding: 10px 12px; border-radius: 8px; margin-bottom: 10px; border: 1px solid var(--border); }
         .template-bar select { margin: 0; font-size: 14px; padding: 8px; }
+        .split-banner { display: flex; justify-content: space-between; align-items: center; gap: 8px; background: rgba(37, 99, 235, 0.14); border: 1px solid rgba(37, 99, 235, 0.45); padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 13px; }
+        .split-panel { background: #252525; border: 1px solid #3b3b3b; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+        .split-item { display: flex; justify-content: space-between; align-items: center; gap: 6px; background: #1e1e1e; border: 1px solid #333; padding: 7px 10px; border-radius: 6px; margin-bottom: 6px; font-size: 13px; }
+        .split-item.is-next { border-color: var(--green); background: rgba(22, 163, 74, 0.12); }
+        .split-controls { display: flex; gap: 4px; }
+        .btn-icon { width: auto; padding: 4px 8px; font-size: 12px; margin: 0; background: #374151; }
         .time-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
         .timer-bar { display: flex; justify-content: space-between; align-items: center; background: #262626; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid var(--border); }
         .exercise-card { background: #252525; border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
@@ -864,7 +984,7 @@ def serve_ui():
         .set-row input, .set-row select { margin: 0; padding: 8px; font-size: 14px; }
         .set-note { margin: 0; padding: 6px 10px; font-size: 13px; background: #252525; }
         .btn-del { background: #dc2626; padding: 8px 11px; width: auto; margin: 0; }
-        .btn-small { width: auto; padding: 8px 12px; font-size: 13px; background: #374151; margin: 0; white-space: nowrap; }
+        .btn-small { width: auto; padding: 8px 10px; font-size: 13px; background: #374151; margin: 0; white-space: nowrap; }
         .btn-edit { background: #d97706; padding: 6px 10px; font-size: 12px; width: auto; margin: 0; }
         .btn-delete-workout { background: #dc2626; padding: 6px 10px; font-size: 12px; width: auto; margin: 0; }
         .btn-cancel-edit { background: #4b5563; padding: 6px 12px; font-size: 13px; width: auto; margin: 0; }
@@ -938,13 +1058,47 @@ def serve_ui():
           <div id="tab-log" class="card">
             <h2 id="logger-heading">Log Session</h2>
 
-            <!-- Template Loader -->
-            <div id="template-bar-wrapper" class="template-bar">
-              <select id="template-select">
-                <option value="">-- Select a Workout Template --</option>
-              </select>
-              <button type="button" class="btn-small" style="background: var(--accent);" onclick="loadSelectedTemplate()">Load</button>
-              <button type="button" class="btn-del" title="Delete selected template" onclick="deleteSelectedTemplate()">✕</button>
+            <!-- Template & Split Controls -->
+            <div id="template-bar-wrapper">
+              <div class="template-bar">
+                <select id="template-select">
+                  <option value="">-- Select a Workout Template --</option>
+                </select>
+                <button type="button" class="btn-small" style="background: var(--accent);" onclick="loadSelectedTemplate()">Load</button>
+                <button type="button" class="btn-small" style="background: #4b5563;" onclick="toggleSplitPanel()">🔄 Split</button>
+                <button type="button" class="btn-del" title="Delete selected template" onclick="deleteSelectedTemplate()">✕</button>
+              </div>
+
+              <!-- Active Split Status Banner -->
+              <div id="split-banner" class="split-banner hidden">
+                <span id="split-status-text"></span>
+                <button type="button" class="btn-small" style="background: #1d4ed8; padding: 5px 10px; font-size: 12px;" onclick="skipToNextSplitDay()">Skip Day ⏭</button>
+              </div>
+
+              <!-- Collapsible Split Configurator -->
+              <div id="split-panel" class="split-panel hidden">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                  <strong style="font-size:14px;">🔄 Workout Split Rotation</strong>
+                  <button type="button" class="btn-icon" onclick="toggleSplitPanel()">Close</button>
+                </div>
+                <p style="font-size:12px; color:var(--muted); margin:0 0 10px 0;">
+                  Add your saved templates in order (e.g., Push → Pull → Legs). Each time you finish a workout, the next day loads automatically.
+                </p>
+
+                <div style="display:grid; grid-template-columns: 1fr auto; gap:6px; margin-bottom:10px;">
+                  <select id="split-add-select" style="margin:0; font-size:13px; padding:8px;">
+                    <option value="">-- Choose template to add --</option>
+                  </select>
+                  <button type="button" class="btn-small" style="background: var(--accent);" onclick="addTemplateToSplit()">+ Add Day</button>
+                </div>
+
+                <div id="split-days-list"></div>
+
+                <div style="display:grid; grid-template-columns: 1fr auto; gap:8px; margin-top:10px;">
+                  <button type="button" style="background: var(--green); margin:0; padding:8px;" onclick="saveSplitConfig()">Save & Load Next Day</button>
+                  <button type="button" class="btn-small" style="background: #374151;" onclick="clearSplitConfig()">Clear Split</button>
+                </div>
+              </div>
             </div>
             
             <!-- Live Session Timer -->
@@ -1085,6 +1239,9 @@ def serve_ui():
         let savedTemplates = [];
         let savedFoodsCatalog = [];
         let workoutsHistoryCache = [];
+        let userSplit = { template_ids: [], current_index: 0, next_template_id: null };
+        let draftSplitIds = [];
+        let draftSplitIndex = 0;
         let timerInterval = null;
         let editingWorkoutId = null;
         let modalTimeout = null;
@@ -1385,28 +1542,29 @@ def serve_ui():
           const res = await fetch('/api/templates', { headers: getAuthHeaders() });
           if (res.ok) {
             savedTemplates = await res.json();
-            const select = document.getElementById('template-select');
-            select.innerHTML = '<option value="">-- Select a Workout Template --</option>' +
-              savedTemplates.map(t => `<option value="${t.id}">${t.name} (${t.sets.length} sets)</option>`).join('');
+            const optionsHtml = savedTemplates
+              .map(t => `<option value="${t.id}">${t.name} (${t.sets.length} sets)</option>`)
+              .join('');
+
+            document.getElementById('template-select').innerHTML =
+              '<option value="">-- Select a Workout Template --</option>' + optionsHtml;
+            document.getElementById('split-add-select').innerHTML =
+              '<option value="">-- Choose template to add --</option>' + optionsHtml;
           }
         }
 
-        function loadSelectedTemplate() {
-          const templateId = document.getElementById('template-select').value;
-          if (!templateId) {
-            alert('Choose a template from the dropdown first.');
-            return;
-          }
+        function applyTemplateById(templateId, notify = false) {
           const tpl = savedTemplates.find(t => t.id === templateId);
-          if (!tpl) return;
+          if (!tpl) return false;
 
+          document.getElementById('template-select').value = tpl.id;
           document.getElementById('workout-title').value = tpl.name;
           document.getElementById('workout-notes').value = tpl.notes || '';
           document.getElementById('exercises-container').innerHTML = '';
 
           if (tpl.sets.length === 0) {
             addExerciseBlock();
-            return;
+            return true;
           }
 
           const groups = [];
@@ -1420,7 +1578,187 @@ def serve_ui():
           });
 
           groups.forEach(g => addExerciseBlock(g.exercise_name, g.sets));
-          showSuccessModal('Template Loaded', `Successfully loaded template "${tpl.name}".`);
+          if (notify) {
+            showSuccessModal('Template Loaded', `Successfully loaded template "${tpl.name}".`);
+          }
+          return true;
+        }
+
+        function loadSelectedTemplate() {
+          const templateId = document.getElementById('template-select').value;
+          if (!templateId) {
+            alert('Choose a template from the dropdown first.');
+            return;
+          }
+          applyTemplateById(templateId, true);
+        }
+
+        // --- Workout Split Rotation Functions ---
+
+        async function refreshSplit() {
+          const res = await fetch('/api/split', { headers: getAuthHeaders() });
+          if (res.ok) {
+            userSplit = await res.json();
+            draftSplitIds = [...userSplit.template_ids];
+            draftSplitIndex = userSplit.current_index || 0;
+            renderSplitBanner();
+            renderDraftSplitList();
+          }
+        }
+
+        function renderSplitBanner() {
+          const banner = document.getElementById('split-banner');
+          const statusEl = document.getElementById('split-status-text');
+
+          if (!userSplit.template_ids || userSplit.template_ids.length === 0) {
+            banner.classList.add('hidden');
+            return;
+          }
+
+          const total = userSplit.template_ids.length;
+          const idx = (userSplit.current_index || 0) % total;
+          const nextTpl = savedTemplates.find(t => t.id === userSplit.next_template_id);
+          const nextName = nextTpl ? nextTpl.name : 'Unknown Template';
+
+          statusEl.innerHTML = `🔄 <strong>Split Day ${idx + 1}/${total}:</strong> ${nextName}`;
+          banner.classList.remove('hidden');
+        }
+
+        function toggleSplitPanel() {
+          const panel = document.getElementById('split-panel');
+          const isOpening = panel.classList.contains('hidden');
+          if (isOpening) {
+            draftSplitIds = [...(userSplit.template_ids || [])];
+            draftSplitIndex = userSplit.current_index || 0;
+            renderDraftSplitList();
+            panel.classList.remove('hidden');
+          } else {
+            panel.classList.add('hidden');
+          }
+        }
+
+        function renderDraftSplitList() {
+          const listEl = document.getElementById('split-days-list');
+          if (draftSplitIds.length === 0) {
+            listEl.innerHTML = '<p style="font-size:12px; color:var(--muted); margin:4px 0;">No days in your split yet. Add saved templates above.</p>';
+            return;
+          }
+
+          const activeIdx = draftSplitIndex % draftSplitIds.length;
+          listEl.innerHTML = draftSplitIds.map((tid, idx) => {
+            const tpl = savedTemplates.find(t => t.id === tid);
+            const name = tpl ? tpl.name : 'Deleted Template';
+            const isNext = idx === activeIdx;
+            return `
+              <div class="split-item ${isNext ? 'is-next' : ''}">
+                <div>
+                  <strong>Day ${idx + 1}:</strong> ${name}
+                  ${isNext ? '<span class="badge" style="background:var(--green); color:#fff; margin-left:6px;">Up Next</span>' : ''}
+                </div>
+                <div class="split-controls">
+                  ${!isNext ? `<button type="button" class="btn-icon" title="Set as Up Next" onclick="setDraftNextDay(${idx})">Set Next</button>` : ''}
+                  <button type="button" class="btn-icon" title="Move Up" onclick="moveDraftSplitItem(${idx}, -1)">↑</button>
+                  <button type="button" class="btn-icon" title="Move Down" onclick="moveDraftSplitItem(${idx}, 1)">↓</button>
+                  <button type="button" class="btn-icon" style="background:#dc2626;" title="Remove" onclick="removeDraftSplitItem(${idx})">✕</button>
+                </div>
+              </div>
+            `;
+          }).join('');
+        }
+
+        function addTemplateToSplit() {
+          const sel = document.getElementById('split-add-select');
+          if (!sel.value) {
+            alert('Select a template first.');
+            return;
+          }
+          draftSplitIds.push(sel.value);
+          renderDraftSplitList();
+        }
+
+        function moveDraftSplitItem(index, delta) {
+          const target = index + delta;
+          if (target < 0 || target >= draftSplitIds.length) return;
+          const temp = draftSplitIds[index];
+          draftSplitIds[index] = draftSplitIds[target];
+          draftSplitIds[target] = temp;
+          if (draftSplitIndex === index) draftSplitIndex = target;
+          else if (draftSplitIndex === target) draftSplitIndex = index;
+          renderDraftSplitList();
+        }
+
+        function removeDraftSplitItem(index) {
+          draftSplitIds.splice(index, 1);
+          if (draftSplitIds.length === 0) draftSplitIndex = 0;
+          else if (draftSplitIndex >= draftSplitIds.length) draftSplitIndex = 0;
+          renderDraftSplitList();
+        }
+
+        function setDraftNextDay(index) {
+          draftSplitIndex = index;
+          renderDraftSplitList();
+        }
+
+        async function saveSplitConfig() {
+          const res = await fetch('/api/split', {
+            method: 'PUT',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+              template_ids: draftSplitIds,
+              current_index: draftSplitIndex
+            })
+          });
+
+          if (res.ok) {
+            userSplit = await res.json();
+            renderSplitBanner();
+            document.getElementById('split-panel').classList.add('hidden');
+            if (userSplit.next_template_id && !editingWorkoutId) {
+              applyTemplateById(userSplit.next_template_id, false);
+            }
+            showSuccessModal('Split Saved!', 'Your next scheduled workout template is loaded and ready.');
+          } else {
+            alert('Failed to save workout split.');
+          }
+        }
+
+        async function clearSplitConfig() {
+          const res = await fetch('/api/split', {
+            method: 'PUT',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ template_ids: [], current_index: 0 })
+          });
+
+          if (res.ok) {
+            userSplit = await res.json();
+            draftSplitIds = [];
+            draftSplitIndex = 0;
+            renderSplitBanner();
+            renderDraftSplitList();
+            document.getElementById('split-panel').classList.add('hidden');
+            showSuccessModal('Split Cleared', 'Automatic split loading has been turned off.');
+          }
+        }
+
+        async function skipToNextSplitDay() {
+          if (!userSplit.template_ids || userSplit.template_ids.length === 0) return;
+          const nextIdx = ((userSplit.current_index || 0) + 1) % userSplit.template_ids.length;
+          const res = await fetch('/api/split', {
+            method: 'PUT',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+              template_ids: userSplit.template_ids,
+              current_index: nextIdx
+            })
+          });
+
+          if (res.ok) {
+            userSplit = await res.json();
+            renderSplitBanner();
+            if (userSplit.next_template_id) {
+              applyTemplateById(userSplit.next_template_id, true);
+            }
+          }
         }
 
         async function saveAsTemplate() {
@@ -1469,10 +1807,26 @@ def serve_ui():
 
           if (res.ok) {
             await refreshTemplates();
+            await refreshSplit();
             showSuccessModal('Template Deleted', 'The workout template has been removed.');
           } else {
             alert('Failed to delete template.');
           }
+        }
+
+        function resetLoggerToNextWorkout() {
+          document.getElementById('workout-notes').value = '';
+          document.getElementById('start-time').value = toLocalDatetimeInput(new Date());
+          document.getElementById('end-time').value = '';
+
+          if (userSplit.next_template_id && applyTemplateById(userSplit.next_template_id, false)) {
+            return;
+          }
+
+          document.getElementById('template-select').value = '';
+          document.getElementById('workout-title').value = 'Workout Session';
+          document.getElementById('exercises-container').innerHTML = '';
+          addExerciseBlock();
         }
 
         async function showApp(username) {
@@ -1486,8 +1840,8 @@ def serve_ui():
           switchTab('log');
 
           await Promise.all([refreshExerciseOptions(), refreshTemplates(), refreshSavedFoods()]);
-          document.getElementById('exercises-container').innerHTML = '';
-          addExerciseBlock();
+          await refreshSplit();
+          resetLoggerToNextWorkout();
           loadHistory();
         }
 
@@ -1552,20 +1906,23 @@ def serve_ui():
               btn.style.background = 'var(--green)';
 
               const wasEditing = editingWorkoutId !== null;
+              if (data.split) {
+                userSplit = data.split;
+                renderSplitBanner();
+              }
+
               cancelEditMode();
-              document.getElementById('exercises-container').innerHTML = '';
-              document.getElementById('workout-notes').value = '';
-              document.getElementById('start-time').value = toLocalDatetimeInput(new Date());
-              document.getElementById('end-time').value = '';
-              
               await refreshExerciseOptions();
-              addExerciseBlock();
               loadHistory();
 
               if (wasEditing) {
                 showSuccessModal('Workout Updated! ✏️', 'Your changes have been saved successfully.');
               } else {
-                showSuccessModal('Workout Finished & Saved! 🎉', 'Amazing job crushing your session today!');
+                const nextTpl = savedTemplates.find(t => t.id === userSplit.next_template_id);
+                const nextMsg = nextTpl
+                  ? `Up next in your split: "${nextTpl.name}" is loaded and ready!`
+                  : 'Amazing job crushing your session today!';
+                showSuccessModal('Workout Finished & Saved! 🎉', nextMsg);
               }
             } else {
               alert(data.detail || 'Failed to save workout');
@@ -1647,12 +2004,7 @@ def serve_ui():
           const cancelBtn = document.getElementById('cancel-edit-btn');
           if (cancelBtn) cancelBtn.remove();
 
-          document.getElementById('workout-title').value = 'Workout Session';
-          document.getElementById('workout-notes').value = '';
-          document.getElementById('start-time').value = toLocalDatetimeInput(new Date());
-          document.getElementById('end-time').value = '';
-          document.getElementById('exercises-container').innerHTML = '';
-          addExerciseBlock();
+          resetLoggerToNextWorkout();
         }
 
         // --- Nutrition Functions ---
