@@ -824,7 +824,7 @@ def list_workouts(
     return results
 
 
-# --- 7. Web Interface with Confetti Notification Modal ---
+# --- 7. Web Interface with Confetti Notification Modal & Safe Error Handling ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1295,7 +1295,7 @@ def serve_ui():
           setItem.innerHTML = `
             <div class="set-row">
               <span class="set-num">${nextNum}</span>
-              <input type="text" class="set-lbs" placeholder="e.g. 135 or 1p 25" value="${weightVal}">
+              <input type="text" class="set-lbs" placeholder="e.g. 135 or 2p 35" value="${weightVal}">
               <select class="set-unit">
                 <option value="lbs" ${unitVal === 'lbs' ? 'selected' : ''}>lbs</option>
                 <option value="kg" ${unitVal === 'kg' ? 'selected' : ''}>kg</option>
@@ -1522,44 +1522,57 @@ def serve_ui():
           const endpoint = editingWorkoutId ? `/api/workouts/${editingWorkoutId}` : '/api/workouts';
           const method = editingWorkoutId ? 'PUT' : 'POST';
 
-          const res = await fetch(endpoint, {
-            method: method,
-            headers: getAuthHeaders(),
-            body: JSON.stringify({
-              title,
-              notes,
-              started_at: startedAt,
-              ended_at: endedAt,
-              sets
-            })
-          });
+          try {
+            const res = await fetch(endpoint, {
+              method: method,
+              headers: getAuthHeaders(),
+              body: JSON.stringify({
+                title,
+                notes,
+                started_at: startedAt,
+                ended_at: endedAt,
+                sets
+              })
+            });
 
-          if (res.ok) {
-            if (timerInterval) clearInterval(timerInterval);
-            document.getElementById('live-timer').innerText = '00:00:00';
-            const btn = document.getElementById('start-btn');
-            btn.innerText = '▶ Start Now';
-            btn.style.background = 'var(--green)';
-
-            const wasEditing = editingWorkoutId !== null;
-            cancelEditMode();
-            document.getElementById('exercises-container').innerHTML = '';
-            document.getElementById('workout-notes').value = '';
-            document.getElementById('start-time').value = toLocalDatetimeInput(new Date());
-            document.getElementById('end-time').value = '';
-            
-            await refreshExerciseOptions();
-            addExerciseBlock();
-            loadHistory();
-
-            if (wasEditing) {
-              showSuccessModal('Workout Updated! ✏️', 'Your changes have been saved successfully.');
+            const contentType = res.headers.get("content-type");
+            let data = null;
+            if (contentType && contentType.includes("application/json")) {
+              data = await res.json();
             } else {
-              showSuccessModal('Workout Finished & Saved! 🎉', 'Amazing job crushing your session today!');
+              const text = await res.text();
+              throw new Error(text || 'Server returned a non-JSON response.');
             }
-          } else {
-            const err = await res.json();
-            alert(err.detail || 'Failed to save workout');
+
+            if (res.ok) {
+              if (timerInterval) clearInterval(timerInterval);
+              document.getElementById('live-timer').innerText = '00:00:00';
+              const btn = document.getElementById('start-btn');
+              btn.innerText = '▶ Start Now';
+              btn.style.background = 'var(--green)';
+
+              const wasEditing = editingWorkoutId !== null;
+              cancelEditMode();
+              document.getElementById('exercises-container').innerHTML = '';
+              document.getElementById('workout-notes').value = '';
+              document.getElementById('start-time').value = toLocalDatetimeInput(new Date());
+              document.getElementById('end-time').value = '';
+              
+              await refreshExerciseOptions();
+              addExerciseBlock();
+              loadHistory();
+
+              if (wasEditing) {
+                showSuccessModal('Workout Updated! ✏️', 'Your changes have been saved successfully.');
+              } else {
+                showSuccessModal('Workout Finished & Saved! 🎉', 'Amazing job crushing your session today!');
+              }
+            } else {
+              alert(data.detail || 'Failed to save workout');
+            }
+          } catch (err) {
+            console.error(err);
+            alert('Error saving workout: ' + (err.message || 'Server error'));
           }
         }
 
