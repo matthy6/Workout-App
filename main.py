@@ -101,6 +101,7 @@ class SetLog(SQLModel, table=True):
     exercise_name: str
     set_number: int
     weight: float
+    weight_unit: Optional[str] = Field(default="lbs")
     reps: int
     rpe: Optional[float] = None
     notes: Optional[str] = None
@@ -127,6 +128,7 @@ class TemplateSet(SQLModel, table=True):
     exercise_name: str
     set_number: int
     weight: Optional[float] = None
+    weight_unit: Optional[str] = Field(default="lbs")
     reps: Optional[int] = None
     rpe: Optional[float] = None
     notes: Optional[str] = None
@@ -325,6 +327,7 @@ def get_exercise_history(
             history_map[workout.id]["sets"].append({
                 "set_number": set_log.set_number,
                 "weight": set_log.weight,
+                "weight_unit": set_log.weight_unit or "lbs",
                 "reps": set_log.reps,
                 "rpe": set_log.rpe,
                 "notes": set_log.notes
@@ -539,6 +542,7 @@ class TemplateSetInput(SQLModel):
     exercise_name: str
     set_number: int
     weight: Optional[float] = None
+    weight_unit: Optional[str] = "lbs"
     reps: Optional[int] = None
     rpe: Optional[float] = None
     notes: Optional[str] = None
@@ -580,6 +584,7 @@ def create_template(
                 exercise_name=item.exercise_name.strip(),
                 set_number=item.set_number,
                 weight=item.weight,
+                weight_unit=item.weight_unit or "lbs",
                 reps=item.reps,
                 rpe=item.rpe,
                 notes=item.notes.strip() if item.notes else None,
@@ -611,6 +616,7 @@ def list_templates(
                     "exercise_name": s.exercise_name,
                     "set_number": s.set_number,
                     "weight": s.weight,
+                    "weight_unit": s.weight_unit or "lbs",
                     "reps": s.reps,
                     "rpe": s.rpe,
                     "notes": s.notes,
@@ -649,6 +655,7 @@ class SetInput(SQLModel):
     exercise_name: str
     set_number: int
     weight: float
+    weight_unit: Optional[str] = "lbs"
     reps: int
     rpe: Optional[float] = None
     notes: Optional[str] = None
@@ -697,6 +704,7 @@ def save_workout(
                 exercise_name=item.exercise_name,
                 set_number=item.set_number,
                 weight=item.weight,
+                weight_unit=item.weight_unit or "lbs",
                 reps=item.reps,
                 rpe=item.rpe,
                 notes=clean_note or None,
@@ -738,6 +746,7 @@ def list_workouts(
                         "exercise": s.exercise_name,
                         "set": s.set_number,
                         "weight": s.weight,
+                        "weight_unit": s.weight_unit or "lbs",
                         "reps": s.reps,
                         "rpe": s.rpe,
                         "notes": s.notes,
@@ -749,7 +758,7 @@ def list_workouts(
     return results
 
 
-# --- 7. Web Interface with Grouped Exercise Cards ---
+# --- 7. Web Interface with Weight Unit Selector ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -784,9 +793,9 @@ def serve_ui():
         .exercise-header { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; margin-bottom: 10px; }
         .exercise-header input { margin: 0; font-weight: 600; background: #1e1e1e; border-color: #444; }
         .set-item { background: #1e1e1e; border: 1px solid #2e2e2e; border-radius: 8px; padding: 8px; margin-bottom: 8px; }
-        .set-row { display: grid; grid-template-columns: 28px 1fr 1fr 1fr auto; gap: 6px; align-items: center; margin-bottom: 6px; }
+        .set-row { display: grid; grid-template-columns: 26px 1fr 85px 1fr 1fr auto; gap: 5px; align-items: center; margin-bottom: 6px; }
         .set-num { font-size: 13px; font-weight: 700; color: var(--muted); text-align: center; background: #2a2a2a; padding: 8px 0; border-radius: 5px; }
-        .set-row input { margin: 0; padding: 8px; font-size: 14px; }
+        .set-row input, .set-row select { margin: 0; padding: 8px; font-size: 14px; }
         .set-note { margin: 0; padding: 6px 10px; font-size: 13px; background: #252525; }
         .btn-del { background: #dc2626; padding: 8px 11px; width: auto; margin: 0; }
         .btn-small { width: auto; padding: 8px 12px; font-size: 13px; background: #374151; margin: 0; white-space: nowrap; }
@@ -1149,8 +1158,6 @@ def serve_ui():
           document.getElementById('food-fat').value = Math.round((fatRate * amount) * 10) / 10;
         }
 
-        // --- Grouped Exercise & Set Card Builders ---
-
         function renumberSets(exerciseCard) {
           const badges = exerciseCard.querySelectorAll('.set-num');
           badges.forEach((b, idx) => {
@@ -1163,7 +1170,8 @@ def serve_ui():
           const setItem = document.createElement('div');
           setItem.className = 'set-item';
 
-          const lbsVal = prefill.weight !== null && prefill.weight !== undefined ? prefill.weight : '';
+          const weightVal = prefill.weight !== null && prefill.weight !== undefined ? prefill.weight : '';
+          const unitVal = prefill.weight_unit || 'lbs';
           const repsVal = prefill.reps !== null && prefill.reps !== undefined ? prefill.reps : '';
           const rpeVal = prefill.rpe !== null && prefill.rpe !== undefined ? prefill.rpe : '';
           const noteVal = prefill.notes ? prefill.notes.replace(/"/g, '&quot;') : '';
@@ -1172,7 +1180,12 @@ def serve_ui():
           setItem.innerHTML = `
             <div class="set-row">
               <span class="set-num">${nextNum}</span>
-              <input type="number" class="set-lbs" placeholder="lbs" step="2.5" value="${lbsVal}">
+              <input type="text" class="set-lbs" placeholder="e.g. 135 or 1p 25" value="${weightVal}">
+              <select class="set-unit">
+                <option value="lbs" ${unitVal === 'lbs' ? 'selected' : ''}>lbs</option>
+                <option value="kg" ${unitVal === 'kg' ? 'selected' : ''}>kg</option>
+                <option value="plate" ${unitVal === 'plate' ? 'selected' : ''}>plate</option>
+              </select>
               <input type="number" class="set-reps" placeholder="reps" value="${repsVal}">
               <input type="number" class="set-rpe" placeholder="RPE" step="0.5" min="1" max="10" value="${rpeVal}">
               <button type="button" class="btn-del" title="Remove set" onclick="removeSetFromExercise(this)">✕</button>
@@ -1227,12 +1240,21 @@ def serve_ui():
 
             const setItems = card.querySelectorAll('.set-item');
             setItems.forEach(item => {
-              const lbsVal = item.querySelector('.set-lbs').value;
+              const weightInput = item.querySelector('.set-lbs').value.trim();
+              const unitVal = item.querySelector('.set-unit').value;
               const repsVal = item.querySelector('.set-reps').value;
               const rpeVal = item.querySelector('.set-rpe').value;
               const noteVal = item.querySelector('.set-note').value.trim() || null;
 
-              const lbs = lbsVal !== '' ? parseFloat(lbsVal) : (requireReps ? 0 : null);
+              // If weight is numeric, parse as float; if plate shorthand (e.g., 1p 25), store as string or parse numeric equivalent
+              let weightNum = 0;
+              if (unitVal === 'plate') {
+                // Store string/shorthand in weight or evaluate for sorting/history if needed
+                weightNum = weightInput; 
+              } else {
+                weightNum = weightInput !== '' ? parseFloat(weightInput) : 0;
+              }
+
               const reps = repsVal !== '' ? parseInt(repsVal) : (requireReps ? 0 : null);
               const rpe = rpeVal !== '' ? parseFloat(rpeVal) : null;
 
@@ -1240,7 +1262,8 @@ def serve_ui():
                 flattened.push({
                   exercise_name: exName,
                   set_number: globalSetCounter++,
-                  weight: lbs,
+                  weight: weightNum,
+                  weight_unit: unitVal,
                   reps: reps,
                   rpe: rpe,
                   notes: noteVal
@@ -1280,7 +1303,6 @@ def serve_ui():
             return;
           }
 
-          // Group consecutive sets sharing the same exercise name into one Exercise Card
           const groups = [];
           tpl.sets.forEach(s => {
             const last = groups[groups.length - 1];
@@ -1595,7 +1617,6 @@ def serve_ui():
           }
 
           container.innerHTML = data.map(w => {
-            // Group consecutive sets by exercise in history view
             const grouped = [];
             w.sets.forEach(s => {
               const last = grouped[grouped.length - 1];
@@ -1618,12 +1639,15 @@ def serve_ui():
                     <div style="margin-bottom:6px;">
                       <div style="font-weight:600; font-size:14px;">${g.exercise}</div>
                       <ul style="margin:2px 0 0 18px; padding:0; font-size:13px; color:#d1d5db;">
-                        ${g.sets.map((s, idx) => `
-                          <li style="margin-bottom:2px;">
-                            Set ${idx + 1}: ${s.weight} lbs × ${s.reps} reps ${s.rpe ? `(@ RPE ${s.rpe})` : ''}
-                            ${s.notes ? `<span style="color:var(--muted);"> — ${s.notes}</span>` : ''}
-                          </li>
-                        `).join('')}
+                        ${g.sets.map((s, idx) => {
+                          const unitDisplay = s.weight_unit === 'plate' ? 'plate' : (s.weight_unit || 'lbs');
+                          return `
+                            <li style="margin-bottom:2px;">
+                              Set ${idx + 1}: ${s.weight} ${unitDisplay} × ${s.reps} reps ${s.rpe ? `(@ RPE ${s.rpe})` : ''}
+                              ${s.notes ? `<span style="color:var(--muted);"> — ${s.notes}</span>` : ''}
+                            </li>
+                          `;
+                        }).join('')}
                       </ul>
                     </div>
                   `).join('')}
@@ -1667,12 +1691,15 @@ def serve_ui():
                 <span class="badge">${h.date}</span>
               </div>
               <ul style="margin: 6px 0 0 16px; padding:0; font-size:14px;">
-                ${h.sets.map((s, idx) => `
-                  <li style="margin-bottom:4px;">
-                    Set ${idx + 1}: <strong>${s.weight} lbs</strong> × <strong>${s.reps} reps</strong> ${s.rpe ? `(@ RPE ${s.rpe})` : ''}
-                    ${s.notes ? `<div style="font-size:12px; color:var(--muted); margin-top:2px;">↳ ${s.notes}</div>` : ''}
-                  </li>
-                `).join('')}
+                ${h.sets.map((s, idx) => {
+                  const unitDisplay = s.weight_unit === 'plate' ? 'plate' : (s.weight_unit || 'lbs');
+                  return `
+                    <li style="margin-bottom:4px;">
+                      Set ${idx + 1}: <strong>${s.weight} ${unitDisplay}</strong> × <strong>${s.reps} reps</strong> ${s.rpe ? `(@ RPE ${s.rpe})` : ''}
+                      ${s.notes ? `<div style="font-size:12px; color:var(--muted); margin-top:2px;">↳ ${s.notes}</div>` : ''}
+                    </li>
+                  `;
+                }).join('')}
               </ul>
             </div>
           `).join('');
