@@ -148,7 +148,7 @@ class FoodLog(SQLModel, table=True):
     carbs: Optional[float] = 0.0
     fats: Optional[float] = 0.0
 
-    user: Optional[User] = Relationship(back_populates="user")
+    user: Optional[User] = Relationship(back_populates="food_logs")
 
 
 class FoodDatabase(SQLModel, table=True):
