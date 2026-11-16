@@ -100,7 +100,7 @@ class SetLog(SQLModel, table=True):
     workout_id: UUID = Field(foreign_key="workoutsession.id", index=True)
     exercise_name: str
     set_number: int
-    weight: str  # stored as string or float representation
+    weight: str
     weight_unit: Optional[str] = Field(default="lbs")
     reps: int
     rpe: Optional[float] = None
@@ -738,7 +738,6 @@ def update_workout(
     if payload.ended_at:
         workout.ended_at = payload.ended_at
 
-    # Clear existing sets and replace with updated ones
     for existing_set in workout.sets:
         session.delete(existing_set)
     session.commit()
@@ -760,6 +759,26 @@ def update_workout(
 
     session.commit()
     return {"status": "updated", "workout_id": str(workout.id)}
+
+
+@app.delete("/api/workouts/{workout_id}")
+def delete_workout(
+    workout_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    workout = session.exec(
+        select(WorkoutSession).where(
+            WorkoutSession.id == workout_id,
+            WorkoutSession.user_id == current_user.id,
+        )
+    ).first()
+    if not workout:
+        raise HTTPException(status_code=404, detail="Workout not found.")
+
+    session.delete(workout)
+    session.commit()
+    return {"status": "deleted"}
 
 
 @app.get("/api/workouts")
@@ -805,7 +824,7 @@ def list_workouts(
     return results
 
 
-# --- 7. Web Interface with Edit Workout Support ---
+# --- 7. Web Interface with Feedback Banners & Delete Workout ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -846,7 +865,8 @@ def serve_ui():
         .set-note { margin: 0; padding: 6px 10px; font-size: 13px; background: #252525; }
         .btn-del { background: #dc2626; padding: 8px 11px; width: auto; margin: 0; }
         .btn-small { width: auto; padding: 8px 12px; font-size: 13px; background: #374151; margin: 0; white-space: nowrap; }
-        .btn-edit { background: #d97706; padding: 6px 12px; font-size: 13px; width: auto; margin: 0; }
+        .btn-edit { background: #d97706; padding: 6px 10px; font-size: 12px; width: auto; margin: 0; }
+        .btn-delete-workout { background: #dc2626; padding: 6px 10px; font-size: 12px; width: auto; margin: 0; }
         .btn-cancel-edit { background: #4b5563; padding: 6px 12px; font-size: 13px; width: auto; margin: 0; }
         .btn-add-set { width: 100%; padding: 7px; font-size: 13px; background: #333; color: #e5e7eb; margin: 0; border: 1px dashed #555; }
         .action-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
@@ -858,6 +878,7 @@ def serve_ui():
         .macro-val { font-size: 16px; font-weight: 700; color: var(--text); }
         .macro-lbl { font-size: 11px; color: var(--muted); }
         .badge { font-size: 12px; background: #333; padding: 4px 8px; border-radius: 4px; color: var(--muted); }
+        .feedback-banner { background: #166534; color: #dcfce7; padding: 10px 14px; border-radius: 8px; margin-bottom: 12px; font-size: 14px; font-weight: 600; display: none; text-align: center; border: 1px solid #22c55e; }
         .hidden { display: none !important; }
       </style>
     </head>
@@ -870,6 +891,9 @@ def serve_ui():
             <button class="btn-small" onclick="logout()">Log Out</button>
           </div>
         </div>
+
+        <!-- Global Feedback Banner -->
+        <div id="feedback-banner" class="feedback-banner"></div>
 
         <!-- Login / Sign Up Screen -->
         <div id="auth-screen" class="card">
@@ -1046,6 +1070,15 @@ def serve_ui():
         let timerInterval = null;
         let editingWorkoutId = null;
 
+        function showFeedback(message) {
+          const banner = document.getElementById('feedback-banner');
+          banner.innerText = message;
+          banner.style.display = 'block';
+          setTimeout(() => {
+            banner.style.display = 'none';
+          }, 3500);
+        }
+
         function switchTab(tabName) {
           const logView = document.getElementById('tab-log');
           const nutView = document.getElementById('tab-nutrition');
@@ -1147,6 +1180,7 @@ def serve_ui():
           if (res.ok) {
             localStorage.setItem('workout_token', data.token);
             showApp(data.username);
+            showFeedback('Successfully signed in!');
           } else {
             alert(data.detail || 'Authentication failed');
           }
@@ -1359,6 +1393,7 @@ def serve_ui():
           });
 
           groups.forEach(g => addExerciseBlock(g.exercise_name, g.sets));
+          showFeedback(`Loaded template "${tpl.name}"!`);
         }
 
         async function saveAsTemplate() {
@@ -1387,7 +1422,7 @@ def serve_ui():
           if (res.ok) {
             await refreshTemplates();
             await refreshExerciseOptions();
-            alert(`Saved template "${templateName.trim()}"!`);
+            showFeedback(`Saved template "${templateName.trim()}" successfully!`);
           } else {
             const err = await res.json();
             alert(err.detail || 'Failed to save template.');
@@ -1407,6 +1442,7 @@ def serve_ui():
 
           if (res.ok) {
             await refreshTemplates();
+            showFeedback('Template deleted successfully.');
           } else {
             alert('Failed to delete template.');
           }
@@ -1478,6 +1514,7 @@ def serve_ui():
             btn.innerText = '▶ Start Now';
             btn.style.background = 'var(--green)';
 
+            const wasEditing = editingWorkoutId !== null;
             cancelEditMode();
             document.getElementById('exercises-container').innerHTML = '';
             document.getElementById('workout-notes').value = '';
@@ -1487,7 +1524,7 @@ def serve_ui():
             await refreshExerciseOptions();
             addExerciseBlock();
             loadHistory();
-            alert(editingWorkoutId ? 'Workout updated successfully!' : 'Workout saved!');
+            showFeedback(wasEditing ? 'Workout updated successfully! 🎉' : 'Workout saved successfully! 🚀');
           } else {
             const err = await res.json();
             alert(err.detail || 'Failed to save workout');
@@ -1503,7 +1540,6 @@ def serve_ui():
           document.getElementById('submit-workout-btn').innerText = 'Save Changes';
           document.getElementById('template-bar-wrapper').classList.add('hidden');
 
-          // Add Cancel Edit Button if not present
           let cancelBtn = document.getElementById('cancel-edit-btn');
           if (!cancelBtn) {
             cancelBtn = document.createElement('button');
@@ -1538,6 +1574,24 @@ def serve_ui():
 
           groups.forEach(g => addExerciseBlock(g.exercise, g.sets));
           switchTab('log');
+          showFeedback('Loaded workout for editing.');
+        }
+
+        async function deleteWorkout(workoutId) {
+          if (!confirm('Are you sure you want to delete this workout log?')) return;
+
+          const res = await fetch(`/api/workouts/${workoutId}`, {
+            method: 'DELETE',
+            headers: getAuthHeaders()
+          });
+
+          if (res.ok) {
+            await loadHistory();
+            await refreshExerciseOptions();
+            showFeedback('Workout deleted successfully.');
+          } else {
+            alert('Failed to delete workout.');
+          }
         }
 
         function cancelEditMode() {
@@ -1670,6 +1724,7 @@ def serve_ui():
             
             await refreshSavedFoods();
             loadNutrition();
+            showFeedback('Food item logged!');
           } else {
             alert('Failed to log food item.');
           }
@@ -1682,6 +1737,7 @@ def serve_ui():
           });
           if (res.ok) {
             loadNutrition();
+            showFeedback('Food item removed.');
           } else {
             alert('Failed to delete item.');
           }
@@ -1745,7 +1801,10 @@ def serve_ui():
                     <strong>${w.title}</strong>
                     <div style="font-size:12px; color:var(--muted);">${formatTimeRange(w)}</div>
                   </div>
-                  <button type="button" class="btn-edit" onclick="editWorkout('${w.id}')">✏️ Edit</button>
+                  <div style="display:flex; gap:6px;">
+                    <button type="button" class="btn-edit" onclick="editWorkout('${w.id}')">✏️ Edit</button>
+                    <button type="button" class="btn-delete-workout" onclick="deleteWorkout('${w.id}')">🗑️ Delete</button>
+                  </div>
                 </div>
                 ${w.notes ? `<p style="font-size:13px; color:var(--muted); margin:4px 0;">${w.notes}</p>` : ''}
                 <div style="margin-top:8px;">
