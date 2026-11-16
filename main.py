@@ -100,7 +100,7 @@ class SetLog(SQLModel, table=True):
     workout_id: UUID = Field(foreign_key="workoutsession.id", index=True)
     exercise_name: str
     set_number: int
-    weight: float
+    weight: str  # stored as string or float representation
     weight_unit: Optional[str] = Field(default="lbs")
     reps: int
     rpe: Optional[float] = None
@@ -127,7 +127,7 @@ class TemplateSet(SQLModel, table=True):
     template_id: UUID = Field(foreign_key="workouttemplate.id", index=True)
     exercise_name: str
     set_number: int
-    weight: Optional[float] = None
+    weight: str
     weight_unit: Optional[str] = Field(default="lbs")
     reps: Optional[int] = None
     rpe: Optional[float] = None
@@ -541,7 +541,7 @@ def delete_food_log(
 class TemplateSetInput(SQLModel):
     exercise_name: str
     set_number: int
-    weight: Optional[float] = None
+    weight: str
     weight_unit: Optional[str] = "lbs"
     reps: Optional[int] = None
     rpe: Optional[float] = None
@@ -583,7 +583,7 @@ def create_template(
                 template_id=template.id,
                 exercise_name=item.exercise_name.strip(),
                 set_number=item.set_number,
-                weight=item.weight,
+                weight=str(item.weight),
                 weight_unit=item.weight_unit or "lbs",
                 reps=item.reps,
                 rpe=item.rpe,
@@ -654,7 +654,7 @@ def delete_template(
 class SetInput(SQLModel):
     exercise_name: str
     set_number: int
-    weight: float
+    weight: str
     weight_unit: Optional[str] = "lbs"
     reps: int
     rpe: Optional[float] = None
@@ -703,7 +703,7 @@ def save_workout(
                 workout_id=workout.id,
                 exercise_name=item.exercise_name,
                 set_number=item.set_number,
-                weight=item.weight,
+                weight=str(item.weight),
                 weight_unit=item.weight_unit or "lbs",
                 reps=item.reps,
                 rpe=item.rpe,
@@ -713,6 +713,53 @@ def save_workout(
 
     session.commit()
     return {"status": "saved", "workout_id": str(workout.id)}
+
+
+@app.put("/api/workouts/{workout_id}")
+def update_workout(
+    workout_id: UUID,
+    payload: WorkoutCreate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    workout = session.exec(
+        select(WorkoutSession).where(
+            WorkoutSession.id == workout_id,
+            WorkoutSession.user_id == current_user.id,
+        )
+    ).first()
+    if not workout:
+        raise HTTPException(status_code=404, detail="Workout not found.")
+
+    workout.title = payload.title
+    workout.notes = payload.notes
+    if payload.started_at:
+        workout.started_at = payload.started_at
+    if payload.ended_at:
+        workout.ended_at = payload.ended_at
+
+    # Clear existing sets and replace with updated ones
+    for existing_set in workout.sets:
+        session.delete(existing_set)
+    session.commit()
+
+    for item in payload.sets:
+        clean_note = item.notes.strip() if item.notes else None
+        session.add(
+            SetLog(
+                workout_id=workout.id,
+                exercise_name=item.exercise_name,
+                set_number=item.set_number,
+                weight=str(item.weight),
+                weight_unit=item.weight_unit or "lbs",
+                reps=item.reps,
+                rpe=item.rpe,
+                notes=clean_note or None,
+            )
+        )
+
+    session.commit()
+    return {"status": "updated", "workout_id": str(workout.id)}
 
 
 @app.get("/api/workouts")
@@ -758,7 +805,7 @@ def list_workouts(
     return results
 
 
-# --- 7. Web Interface with Weight Unit Selector ---
+# --- 7. Web Interface with Edit Workout Support ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -799,6 +846,8 @@ def serve_ui():
         .set-note { margin: 0; padding: 6px 10px; font-size: 13px; background: #252525; }
         .btn-del { background: #dc2626; padding: 8px 11px; width: auto; margin: 0; }
         .btn-small { width: auto; padding: 8px 12px; font-size: 13px; background: #374151; margin: 0; white-space: nowrap; }
+        .btn-edit { background: #d97706; padding: 6px 12px; font-size: 13px; width: auto; margin: 0; }
+        .btn-cancel-edit { background: #4b5563; padding: 6px 12px; font-size: 13px; width: auto; margin: 0; }
         .btn-add-set { width: 100%; padding: 7px; font-size: 13px; background: #333; color: #e5e7eb; margin: 0; border: 1px dashed #555; }
         .action-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
         .action-row button { margin: 0; }
@@ -843,12 +892,12 @@ def serve_ui():
             <button type="button" id="tab-btn-exercises" class="tab-btn" onclick="switchTab('exercises')">Exercises</button>
           </div>
 
-          <!-- Tab 1: Active Workout Logger -->
+          <!-- Tab 1: Active Workout Logger / Editor -->
           <div id="tab-log" class="card">
-            <h2>Log Session</h2>
+            <h2 id="logger-heading">Log Session</h2>
 
             <!-- Template Loader -->
-            <div class="template-bar">
+            <div id="template-bar-wrapper" class="template-bar">
               <select id="template-select">
                 <option value="">-- Select a Workout Template --</option>
               </select>
@@ -889,7 +938,10 @@ def serve_ui():
               <button type="button" onclick="addExerciseBlock()" style="background: #374151;">+ Add Exercise</button>
               <button type="button" onclick="saveAsTemplate()" style="background: #4b5563;">📋 Save as Template</button>
             </div>
-            <button type="button" onclick="submitWorkout()">Finish & Save Workout</button>
+            
+            <div id="logger-action-buttons">
+              <button type="button" id="submit-workout-btn" onclick="submitWorkout()">Finish & Save Workout</button>
+            </div>
           </div>
 
           <!-- Tab 2: Nutrition & Calorie Tracker -->
@@ -990,7 +1042,9 @@ def serve_ui():
         let exerciseCatalog = [];
         let savedTemplates = [];
         let savedFoodsCatalog = [];
+        let workoutsHistoryCache = [];
         let timerInterval = null;
+        let editingWorkoutId = null;
 
         function switchTab(tabName) {
           const logView = document.getElementById('tab-log');
@@ -1246,15 +1300,6 @@ def serve_ui():
               const rpeVal = item.querySelector('.set-rpe').value;
               const noteVal = item.querySelector('.set-note').value.trim() || null;
 
-              // If weight is numeric, parse as float; if plate shorthand (e.g., 1p 25), store as string or parse numeric equivalent
-              let weightNum = 0;
-              if (unitVal === 'plate') {
-                // Store string/shorthand in weight or evaluate for sorting/history if needed
-                weightNum = weightInput; 
-              } else {
-                weightNum = weightInput !== '' ? parseFloat(weightInput) : 0;
-              }
-
               const reps = repsVal !== '' ? parseInt(repsVal) : (requireReps ? 0 : null);
               const rpe = rpeVal !== '' ? parseFloat(rpeVal) : null;
 
@@ -1262,7 +1307,7 @@ def serve_ui():
                 flattened.push({
                   exercise_name: exName,
                   set_number: globalSetCounter++,
-                  weight: weightNum,
+                  weight: weightInput,
                   weight_unit: unitVal,
                   reps: reps,
                   rpe: rpe,
@@ -1411,8 +1456,11 @@ def serve_ui():
             return;
           }
 
-          const res = await fetch('/api/workouts', {
-            method: 'POST',
+          const endpoint = editingWorkoutId ? `/api/workouts/${editingWorkoutId}` : '/api/workouts';
+          const method = editingWorkoutId ? 'PUT' : 'POST';
+
+          const res = await fetch(endpoint, {
+            method: method,
             headers: getAuthHeaders(),
             body: JSON.stringify({
               title,
@@ -1430,6 +1478,7 @@ def serve_ui():
             btn.innerText = '▶ Start Now';
             btn.style.background = 'var(--green)';
 
+            cancelEditMode();
             document.getElementById('exercises-container').innerHTML = '';
             document.getElementById('workout-notes').value = '';
             document.getElementById('start-time').value = toLocalDatetimeInput(new Date());
@@ -1438,11 +1487,73 @@ def serve_ui():
             await refreshExerciseOptions();
             addExerciseBlock();
             loadHistory();
-            alert('Workout saved!');
+            alert(editingWorkoutId ? 'Workout updated successfully!' : 'Workout saved!');
           } else {
             const err = await res.json();
             alert(err.detail || 'Failed to save workout');
           }
+        }
+
+        function editWorkout(workoutId) {
+          const workout = workoutsHistoryCache.find(w => w.id === workoutId);
+          if (!workout) return;
+
+          editingWorkoutId = workout.id;
+          document.getElementById('logger-heading').innerText = 'Edit Workout Session';
+          document.getElementById('submit-workout-btn').innerText = 'Save Changes';
+          document.getElementById('template-bar-wrapper').classList.add('hidden');
+
+          // Add Cancel Edit Button if not present
+          let cancelBtn = document.getElementById('cancel-edit-btn');
+          if (!cancelBtn) {
+            cancelBtn = document.createElement('button');
+            cancelBtn.id = 'cancel-edit-btn';
+            cancelBtn.className = 'btn-cancel-edit';
+            cancelBtn.innerText = 'Cancel Edit';
+            cancelBtn.type = 'button';
+            cancelBtn.onclick = cancelEditMode;
+            document.getElementById('logger-action-buttons').appendChild(cancelBtn);
+          }
+
+          document.getElementById('workout-title').value = workout.title;
+          document.getElementById('workout-notes').value = workout.notes || '';
+          if (workout.started_at) {
+            document.getElementById('start-time').value = workout.started_at.slice(0, 16);
+          }
+          if (workout.ended_at) {
+            document.getElementById('end-time').value = workout.ended_at.slice(0, 16);
+          }
+
+          document.getElementById('exercises-container').innerHTML = '';
+
+          const groups = [];
+          workout.sets.forEach(s => {
+            const last = groups[groups.length - 1];
+            if (last && last.exercise.toLowerCase() === s.exercise.toLowerCase()) {
+              last.sets.push({ weight: s.weight, weight_unit: s.weight_unit, reps: s.reps, rpe: s.rpe, notes: s.notes });
+            } else {
+              groups.push({ exercise: s.exercise, sets: [{ weight: s.weight, weight_unit: s.weight_unit, reps: s.reps, rpe: s.rpe, notes: s.notes }] });
+            }
+          });
+
+          groups.forEach(g => addExerciseBlock(g.exercise, g.sets));
+          switchTab('log');
+        }
+
+        function cancelEditMode() {
+          editingWorkoutId = null;
+          document.getElementById('logger-heading').innerText = 'Log Session';
+          document.getElementById('submit-workout-btn').innerText = 'Finish & Save Workout';
+          document.getElementById('template-bar-wrapper').classList.remove('hidden');
+          const cancelBtn = document.getElementById('cancel-edit-btn');
+          if (cancelBtn) cancelBtn.remove();
+
+          document.getElementById('workout-title').value = 'Workout Session';
+          document.getElementById('workout-notes').value = '';
+          document.getElementById('start-time').value = toLocalDatetimeInput(new Date());
+          document.getElementById('end-time').value = '';
+          document.getElementById('exercises-container').innerHTML = '';
+          addExerciseBlock();
         }
 
         // --- Nutrition Functions ---
@@ -1608,15 +1719,15 @@ def serve_ui():
 
         async function loadHistory() {
           const res = await fetch('/api/workouts', { headers: getAuthHeaders() });
-          const data = await res.json();
+          workoutsHistoryCache = await res.json();
           const container = document.getElementById('history-container');
 
-          if (data.length === 0) {
+          if (workoutsHistoryCache.length === 0) {
             container.innerHTML = '<p style="color: var(--muted)">No workouts logged yet.</p>';
             return;
           }
 
-          container.innerHTML = data.map(w => {
+          container.innerHTML = workoutsHistoryCache.map(w => {
             const grouped = [];
             w.sets.forEach(s => {
               const last = grouped[grouped.length - 1];
@@ -1629,9 +1740,12 @@ def serve_ui():
 
             return `
               <div class="history-item">
-                <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
-                  <strong>${w.title}</strong>
-                  <span class="badge">${formatTimeRange(w)}</span>
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:6px;">
+                  <div>
+                    <strong>${w.title}</strong>
+                    <div style="font-size:12px; color:var(--muted);">${formatTimeRange(w)}</div>
+                  </div>
+                  <button type="button" class="btn-edit" onclick="editWorkout('${w.id}')">✏️ Edit</button>
                 </div>
                 ${w.notes ? `<p style="font-size:13px; color:var(--muted); margin:4px 0;">${w.notes}</p>` : ''}
                 <div style="margin-top:8px;">
