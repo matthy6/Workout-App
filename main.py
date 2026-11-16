@@ -749,7 +749,7 @@ def list_workouts(
     return results
 
 
-# --- 7. Web Interface with Nutrition History Tab ---
+# --- 7. Web Interface with Grouped Exercise Cards ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -780,12 +780,17 @@ def serve_ui():
         .template-bar select { margin: 0; font-size: 14px; padding: 8px; }
         .time-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
         .timer-bar { display: flex; justify-content: space-between; align-items: center; background: #262626; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid var(--border); }
-        .set-card { background: #252525; border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-bottom: 10px; }
-        .set-row { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; gap: 6px; align-items: center; margin-bottom: 6px; }
-        .set-row input, .set-row select { margin: 0; }
-        .set-note { margin: 0; padding: 7px 10px; font-size: 13px; background: #1e1e1e; }
-        .btn-del { background: #dc2626; padding: 8px 12px; width: auto; margin: 0; }
+        .exercise-card { background: #252525; border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+        .exercise-header { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; margin-bottom: 10px; }
+        .exercise-header input { margin: 0; font-weight: 600; background: #1e1e1e; border-color: #444; }
+        .set-item { background: #1e1e1e; border: 1px solid #2e2e2e; border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+        .set-row { display: grid; grid-template-columns: 28px 1fr 1fr 1fr auto; gap: 6px; align-items: center; margin-bottom: 6px; }
+        .set-num { font-size: 13px; font-weight: 700; color: var(--muted); text-align: center; background: #2a2a2a; padding: 8px 0; border-radius: 5px; }
+        .set-row input { margin: 0; padding: 8px; font-size: 14px; }
+        .set-note { margin: 0; padding: 6px 10px; font-size: 13px; background: #252525; }
+        .btn-del { background: #dc2626; padding: 8px 11px; width: auto; margin: 0; }
         .btn-small { width: auto; padding: 8px 12px; font-size: 13px; background: #374151; margin: 0; white-space: nowrap; }
+        .btn-add-set { width: 100%; padding: 7px; font-size: 13px; background: #333; color: #e5e7eb; margin: 0; border: 1px dashed #555; }
         .action-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
         .action-row button { margin: 0; }
         .history-item { border-bottom: 1px solid var(--border); padding: 12px 0; }
@@ -867,12 +872,12 @@ def serve_ui():
 
             <textarea id="workout-notes" placeholder="Overall session notes (optional)..." rows="2"></textarea>
 
-            <h3>Sets</h3>
+            <h3>Exercises</h3>
             <datalist id="exercise-options"></datalist>
-            <div id="sets-container"></div>
+            <div id="exercises-container"></div>
             
             <div class="action-row">
-              <button type="button" onclick="addSetRow()" style="background: #374151;">+ Add Set</button>
+              <button type="button" onclick="addExerciseBlock()" style="background: #374151;">+ Add Exercise</button>
               <button type="button" onclick="saveAsTemplate()" style="background: #4b5563;">📋 Save as Template</button>
             </div>
             <button type="button" onclick="submitWorkout()">Finish & Save Workout</button>
@@ -1144,6 +1149,109 @@ def serve_ui():
           document.getElementById('food-fat').value = Math.round((fatRate * amount) * 10) / 10;
         }
 
+        // --- Grouped Exercise & Set Card Builders ---
+
+        function renumberSets(exerciseCard) {
+          const badges = exerciseCard.querySelectorAll('.set-num');
+          badges.forEach((b, idx) => {
+            b.innerText = idx + 1;
+          });
+        }
+
+        function addSetToExercise(exerciseCard, prefill = {}) {
+          const setsList = exerciseCard.querySelector('.exercise-sets-list');
+          const setItem = document.createElement('div');
+          setItem.className = 'set-item';
+
+          const lbsVal = prefill.weight !== null && prefill.weight !== undefined ? prefill.weight : '';
+          const repsVal = prefill.reps !== null && prefill.reps !== undefined ? prefill.reps : '';
+          const rpeVal = prefill.rpe !== null && prefill.rpe !== undefined ? prefill.rpe : '';
+          const noteVal = prefill.notes ? prefill.notes.replace(/"/g, '&quot;') : '';
+          const nextNum = setsList.children.length + 1;
+
+          setItem.innerHTML = `
+            <div class="set-row">
+              <span class="set-num">${nextNum}</span>
+              <input type="number" class="set-lbs" placeholder="lbs" step="2.5" value="${lbsVal}">
+              <input type="number" class="set-reps" placeholder="reps" value="${repsVal}">
+              <input type="number" class="set-rpe" placeholder="RPE" step="0.5" min="1" max="10" value="${rpeVal}">
+              <button type="button" class="btn-del" title="Remove set" onclick="removeSetFromExercise(this)">✕</button>
+            </div>
+            <input type="text" class="set-note" placeholder="Set note (optional)..." value="${noteVal}">
+          `;
+          setsList.appendChild(setItem);
+        }
+
+        function removeSetFromExercise(btn) {
+          const exerciseCard = btn.closest('.exercise-card');
+          btn.closest('.set-item').remove();
+          if (exerciseCard.querySelectorAll('.set-item').length === 0) {
+            exerciseCard.remove();
+          } else {
+            renumberSets(exerciseCard);
+          }
+        }
+
+        function addExerciseBlock(exerciseName = '', setsPrefill = []) {
+          const container = document.getElementById('exercises-container');
+          const card = document.createElement('div');
+          card.className = 'exercise-card';
+
+          const exVal = exerciseName ? exerciseName.replace(/"/g, '&quot;') : '';
+
+          card.innerHTML = `
+            <div class="exercise-header">
+              <input type="text" class="ex-name" list="exercise-options" placeholder="Exercise name (e.g. Bench Press)..." value="${exVal}">
+              <button type="button" class="btn-del" title="Remove entire exercise" onclick="this.closest('.exercise-card').remove()">✕</button>
+            </div>
+            <div class="exercise-sets-list"></div>
+            <button type="button" class="btn-add-set" onclick="addSetToExercise(this.closest('.exercise-card'))">+ Add Set</button>
+          `;
+          container.appendChild(card);
+
+          if (setsPrefill.length > 0) {
+            setsPrefill.forEach(s => addSetToExercise(card, s));
+          } else {
+            addSetToExercise(card);
+          }
+        }
+
+        function collectFlattenedSets(requireReps = true) {
+          const exerciseCards = document.querySelectorAll('.exercise-card');
+          const flattened = [];
+          let globalSetCounter = 1;
+
+          exerciseCards.forEach(card => {
+            const exName = card.querySelector('.ex-name').value.trim();
+            if (!exName) return;
+
+            const setItems = card.querySelectorAll('.set-item');
+            setItems.forEach(item => {
+              const lbsVal = item.querySelector('.set-lbs').value;
+              const repsVal = item.querySelector('.set-reps').value;
+              const rpeVal = item.querySelector('.set-rpe').value;
+              const noteVal = item.querySelector('.set-note').value.trim() || null;
+
+              const lbs = lbsVal !== '' ? parseFloat(lbsVal) : (requireReps ? 0 : null);
+              const reps = repsVal !== '' ? parseInt(repsVal) : (requireReps ? 0 : null);
+              const rpe = rpeVal !== '' ? parseFloat(rpeVal) : null;
+
+              if (!requireReps || (reps && reps > 0)) {
+                flattened.push({
+                  exercise_name: exName,
+                  set_number: globalSetCounter++,
+                  weight: lbs,
+                  reps: reps,
+                  rpe: rpe,
+                  notes: noteVal
+                });
+              }
+            });
+          });
+
+          return flattened;
+        }
+
         async function refreshTemplates() {
           const res = await fetch('/api/templates', { headers: getAuthHeaders() });
           if (res.ok) {
@@ -1165,13 +1273,25 @@ def serve_ui():
 
           document.getElementById('workout-title').value = tpl.name;
           document.getElementById('workout-notes').value = tpl.notes || '';
-          document.getElementById('sets-container').innerHTML = '';
+          document.getElementById('exercises-container').innerHTML = '';
 
           if (tpl.sets.length === 0) {
-            addSetRow();
-          } else {
-            tpl.sets.forEach(s => addSetRow(s));
+            addExerciseBlock();
+            return;
           }
+
+          // Group consecutive sets sharing the same exercise name into one Exercise Card
+          const groups = [];
+          tpl.sets.forEach(s => {
+            const last = groups[groups.length - 1];
+            if (last && last.exercise_name.toLowerCase() === s.exercise_name.toLowerCase()) {
+              last.sets.push(s);
+            } else {
+              groups.push({ exercise_name: s.exercise_name, sets: [s] });
+            }
+          });
+
+          groups.forEach(g => addExerciseBlock(g.exercise_name, g.sets));
         }
 
         async function saveAsTemplate() {
@@ -1180,27 +1300,7 @@ def serve_ui():
           if (!templateName || !templateName.trim()) return;
 
           const notes = document.getElementById('workout-notes').value.trim() || null;
-          const cards = document.querySelectorAll('.set-card');
-          const sets = [];
-
-          cards.forEach((c, idx) => {
-            const ex = c.querySelector('.set-ex').value.trim();
-            const lbsVal = c.querySelector('.set-lbs').value;
-            const repsVal = c.querySelector('.set-reps').value;
-            const rpeVal = c.querySelector('.set-rpe').value;
-            const setNote = c.querySelector('.set-note').value.trim() || null;
-
-            if (ex) {
-              sets.push({
-                exercise_name: ex,
-                set_number: idx + 1,
-                weight: lbsVal !== '' ? parseFloat(lbsVal) : null,
-                reps: repsVal !== '' ? parseInt(repsVal) : null,
-                rpe: rpeVal !== '' ? parseFloat(rpeVal) : null,
-                notes: setNote
-              });
-            }
-          });
+          const sets = collectFlattenedSets(false);
 
           if (sets.length === 0) {
             alert('Enter at least one exercise name before saving a template.');
@@ -1256,8 +1356,8 @@ def serve_ui():
           switchTab('log');
 
           await Promise.all([refreshExerciseOptions(), refreshTemplates(), refreshSavedFoods()]);
-          document.getElementById('sets-container').innerHTML = '';
-          addSetRow();
+          document.getElementById('exercises-container').innerHTML = '';
+          addExerciseBlock();
           loadHistory();
         }
 
@@ -1273,30 +1373,6 @@ def serve_ui():
           }
         }
 
-        function addSetRow(prefill = {}) {
-          const container = document.getElementById('sets-container');
-          const card = document.createElement('div');
-          card.className = 'set-card';
-
-          const exVal = prefill.exercise_name ? prefill.exercise_name.replace(/"/g, '&quot;') : '';
-          const lbsVal = prefill.weight !== null && prefill.weight !== undefined ? prefill.weight : '';
-          const repsVal = prefill.reps !== null && prefill.reps !== undefined ? prefill.reps : '';
-          const rpeVal = prefill.rpe !== null && prefill.rpe !== undefined ? prefill.rpe : '';
-          const noteVal = prefill.notes ? prefill.notes.replace(/"/g, '&quot;') : '';
-
-          card.innerHTML = `
-            <div class="set-row">
-              <input type="text" class="set-ex" list="exercise-options" placeholder="Exercise name..." value="${exVal}">
-              <input type="number" class="set-lbs" placeholder="lbs" step="2.5" value="${lbsVal}">
-              <input type="number" class="set-reps" placeholder="reps" value="${repsVal}">
-              <input type="number" class="set-rpe" placeholder="RPE" step="0.5" min="1" max="10" value="${rpeVal}">
-              <button class="btn-del" onclick="this.closest('.set-card').remove()">✕</button>
-            </div>
-            <input type="text" class="set-note" placeholder="Set note (e.g., paused reps, beltless, form cue...)" value="${noteVal}">
-          `;
-          container.appendChild(card);
-        }
-
         async function submitWorkout() {
           const title = document.getElementById('workout-title').value;
           const notes = document.getElementById('workout-notes').value;
@@ -1306,26 +1382,7 @@ def serve_ui():
           const startedAt = startVal ? new Date(startVal).toISOString() : null;
           const endedAt = endVal ? new Date(endVal).toISOString() : new Date().toISOString();
 
-          const cards = document.querySelectorAll('.set-card');
-          const sets = [];
-
-          cards.forEach((c, idx) => {
-            const ex = c.querySelector('.set-ex').value.trim();
-            const lbs = parseFloat(c.querySelector('.set-lbs').value) || 0;
-            const reps = parseInt(c.querySelector('.set-reps').value) || 0;
-            const rpe = parseFloat(c.querySelector('.set-rpe').value) || null;
-            const setNote = c.querySelector('.set-note').value.trim() || null;
-            if (ex && reps > 0) {
-              sets.push({
-                exercise_name: ex,
-                set_number: idx + 1,
-                weight: lbs,
-                reps: reps,
-                rpe: rpe,
-                notes: setNote
-              });
-            }
-          });
+          const sets = collectFlattenedSets(true);
 
           if (sets.length === 0) {
             alert('Please enter an exercise name and reps for at least one set.');
@@ -1351,13 +1408,13 @@ def serve_ui():
             btn.innerText = '▶ Start Now';
             btn.style.background = 'var(--green)';
 
-            document.getElementById('sets-container').innerHTML = '';
+            document.getElementById('exercises-container').innerHTML = '';
             document.getElementById('workout-notes').value = '';
             document.getElementById('start-time').value = toLocalDatetimeInput(new Date());
             document.getElementById('end-time').value = '';
             
             await refreshExerciseOptions();
-            addSetRow();
+            addExerciseBlock();
             loadHistory();
             alert('Workout saved!');
           } else {
@@ -1531,31 +1588,49 @@ def serve_ui():
           const res = await fetch('/api/workouts', { headers: getAuthHeaders() });
           const data = await res.json();
           const container = document.getElementById('history-container');
-          const countBadge = document.getElementById('history-count');
-          if (countBadge) countBadge.innerText = data.length > 0 ? `(${data.length})` : '';
 
           if (data.length === 0) {
             container.innerHTML = '<p style="color: var(--muted)">No workouts logged yet.</p>';
             return;
           }
 
-          container.innerHTML = data.map(w => `
-            <div class="history-item">
-              <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
-                <strong>${w.title}</strong>
-                <span class="badge">${formatTimeRange(w)}</span>
+          container.innerHTML = data.map(w => {
+            // Group consecutive sets by exercise in history view
+            const grouped = [];
+            w.sets.forEach(s => {
+              const last = grouped[grouped.length - 1];
+              if (last && last.exercise.toLowerCase() === s.exercise.toLowerCase()) {
+                last.sets.push(s);
+              } else {
+                grouped.push({ exercise: s.exercise, sets: [s] });
+              }
+            });
+
+            return `
+              <div class="history-item">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+                  <strong>${w.title}</strong>
+                  <span class="badge">${formatTimeRange(w)}</span>
+                </div>
+                ${w.notes ? `<p style="font-size:13px; color:var(--muted); margin:4px 0;">${w.notes}</p>` : ''}
+                <div style="margin-top:8px;">
+                  ${grouped.map(g => `
+                    <div style="margin-bottom:6px;">
+                      <div style="font-weight:600; font-size:14px;">${g.exercise}</div>
+                      <ul style="margin:2px 0 0 18px; padding:0; font-size:13px; color:#d1d5db;">
+                        ${g.sets.map((s, idx) => `
+                          <li style="margin-bottom:2px;">
+                            Set ${idx + 1}: ${s.weight} lbs × ${s.reps} reps ${s.rpe ? `(@ RPE ${s.rpe})` : ''}
+                            ${s.notes ? `<span style="color:var(--muted);"> — ${s.notes}</span>` : ''}
+                          </li>
+                        `).join('')}
+                      </ul>
+                    </div>
+                  `).join('')}
+                </div>
               </div>
-              ${w.notes ? `<p style="font-size:13px; color:var(--muted); margin:4px 0;">${w.notes}</p>` : ''}
-              <ul style="margin: 6px 0 0 16px; padding:0; font-size:14px;">
-                ${w.sets.map(s => `
-                  <li style="margin-bottom:4px;">
-                    ${s.exercise}: ${s.weight} lbs × ${s.reps} reps ${s.rpe ? `(@ RPE ${s.rpe})` : ''}
-                    ${s.notes ? `<div style="font-size:12px; color:var(--muted); margin-top:2px;">↳ ${s.notes}</div>` : ''}
-                  </li>
-                `).join('')}
-              </ul>
-            </div>
-          `).join('');
+            `;
+          }).join('');
         }
 
         async function loadExerciseHistory() {
@@ -1592,9 +1667,9 @@ def serve_ui():
                 <span class="badge">${h.date}</span>
               </div>
               <ul style="margin: 6px 0 0 16px; padding:0; font-size:14px;">
-                ${h.sets.map(s => `
+                ${h.sets.map((s, idx) => `
                   <li style="margin-bottom:4px;">
-                    Set ${s.set_number}: <strong>${s.weight} lbs</strong> × <strong>${s.reps} reps</strong> ${s.rpe ? `(@ RPE ${s.rpe})` : ''}
+                    Set ${idx + 1}: <strong>${s.weight} lbs</strong> × <strong>${s.reps} reps</strong> ${s.rpe ? `(@ RPE ${s.rpe})` : ''}
                     ${s.notes ? `<div style="font-size:12px; color:var(--muted); margin-top:2px;">↳ ${s.notes}</div>` : ''}
                   </li>
                 `).join('')}
