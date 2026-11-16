@@ -148,7 +148,7 @@ class FoodLog(SQLModel, table=True):
     carbs: Optional[float] = 0.0
     fats: Optional[float] = 0.0
 
-    user: Optional[User] = Relationship(back_populates="food_logs")
+    user: Optional[User] = Relationship(back_populates="user")
 
 
 class FoodDatabase(SQLModel, table=True):
@@ -824,7 +824,7 @@ def list_workouts(
     return results
 
 
-# --- 7. Web Interface with Feedback Banners & Delete Workout ---
+# --- 7. Web Interface with Confetti Notification Modal ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -878,11 +878,32 @@ def serve_ui():
         .macro-val { font-size: 16px; font-weight: 700; color: var(--text); }
         .macro-lbl { font-size: 11px; color: var(--muted); }
         .badge { font-size: 12px; background: #333; padding: 4px 8px; border-radius: 4px; color: var(--muted); }
-        .feedback-banner { background: #166534; color: #dcfce7; padding: 10px 14px; border-radius: 8px; margin-bottom: 12px; font-size: 14px; font-weight: 600; display: none; text-align: center; border: 1px solid #22c55e; }
+        
+        /* Confetti / Success Modal Overlay */
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: flex; justify-content: center; align-items: center; z-index: 9999; opacity: 0; pointer-events: none; transition: opacity 0.25s ease; }
+        .modal-overlay.active { opacity: 1; pointer-events: auto; }
+        .modal-card { background: #1f2937; border: 1px solid #374151; border-radius: 16px; padding: 28px 36px; text-align: center; max-width: 360px; width: 90%; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5); transform: scale(0.9); transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1); }
+        .modal-overlay.active .modal-card { transform: scale(1); }
+        .confetti-emojis { font-size: 38px; margin-bottom: 10px; }
+        .modal-title { font-size: 20px; font-weight: 700; color: #fff; margin-bottom: 6px; }
+        .modal-msg { font-size: 14px; color: #9ca3af; margin-bottom: 20px; }
+        .modal-btn { background: var(--green); padding: 10px 20px; border-radius: 8px; font-weight: 600; width: 100%; margin: 0; }
+
         .hidden { display: none !important; }
       </style>
     </head>
     <body>
+
+      <!-- Confetti Success Modal -->
+      <div id="success-modal" class="modal-overlay" onclick="closeSuccessModal()">
+        <div class="modal-card" onclick="event.stopPropagation()">
+          <div class="confetti-emojis">🎉 🚀 💪</div>
+          <div id="modal-title" class="modal-title">Workout Saved!</div>
+          <div id="modal-msg" class="modal-msg">Your session has been securely logged and added to your progress history.</div>
+          <button class="modal-btn" onclick="closeSuccessModal()">Awesome!</button>
+        </div>
+      </div>
+
       <div class="container">
         <div class="header-bar">
           <h1>🏋️ Workout & Diet</h1>
@@ -891,9 +912,6 @@ def serve_ui():
             <button class="btn-small" onclick="logout()">Log Out</button>
           </div>
         </div>
-
-        <!-- Global Feedback Banner -->
-        <div id="feedback-banner" class="feedback-banner"></div>
 
         <!-- Login / Sign Up Screen -->
         <div id="auth-screen" class="card">
@@ -1069,14 +1087,23 @@ def serve_ui():
         let workoutsHistoryCache = [];
         let timerInterval = null;
         let editingWorkoutId = null;
+        let modalTimeout = null;
 
-        function showFeedback(message) {
-          const banner = document.getElementById('feedback-banner');
-          banner.innerText = message;
-          banner.style.display = 'block';
-          setTimeout(() => {
-            banner.style.display = 'none';
-          }, 3500);
+        function showSuccessModal(title, message) {
+          document.getElementById('modal-title').innerText = title;
+          document.getElementById('modal-msg').innerText = message;
+          const modal = document.getElementById('success-modal');
+          modal.classList.add('active');
+
+          if (modalTimeout) clearTimeout(modalTimeout);
+          modalTimeout = setTimeout(() => {
+            closeSuccessModal();
+          }, 3000);
+        }
+
+        function closeSuccessModal() {
+          const modal = document.getElementById('success-modal');
+          modal.classList.remove('active');
         }
 
         function switchTab(tabName) {
@@ -1180,7 +1207,7 @@ def serve_ui():
           if (res.ok) {
             localStorage.setItem('workout_token', data.token);
             showApp(data.username);
-            showFeedback('Successfully signed in!');
+            showSuccessModal('Welcome Back!', 'Successfully signed in to your account.');
           } else {
             alert(data.detail || 'Authentication failed');
           }
@@ -1393,7 +1420,7 @@ def serve_ui():
           });
 
           groups.forEach(g => addExerciseBlock(g.exercise_name, g.sets));
-          showFeedback(`Loaded template "${tpl.name}"!`);
+          showSuccessModal('Template Loaded', `Successfully loaded template "${tpl.name}".`);
         }
 
         async function saveAsTemplate() {
@@ -1422,7 +1449,7 @@ def serve_ui():
           if (res.ok) {
             await refreshTemplates();
             await refreshExerciseOptions();
-            showFeedback(`Saved template "${templateName.trim()}" successfully!`);
+            showSuccessModal('Template Saved!', `Routine "${templateName.trim()}" is ready for future workouts.`);
           } else {
             const err = await res.json();
             alert(err.detail || 'Failed to save template.');
@@ -1442,7 +1469,7 @@ def serve_ui():
 
           if (res.ok) {
             await refreshTemplates();
-            showFeedback('Template deleted successfully.');
+            showSuccessModal('Template Deleted', 'The workout template has been removed.');
           } else {
             alert('Failed to delete template.');
           }
@@ -1524,7 +1551,12 @@ def serve_ui():
             await refreshExerciseOptions();
             addExerciseBlock();
             loadHistory();
-            showFeedback(wasEditing ? 'Workout updated successfully! 🎉' : 'Workout saved successfully! 🚀');
+
+            if (wasEditing) {
+              showSuccessModal('Workout Updated! ✏️', 'Your changes have been saved successfully.');
+            } else {
+              showSuccessModal('Workout Finished & Saved! 🎉', 'Amazing job crushing your session today!');
+            }
           } else {
             const err = await res.json();
             alert(err.detail || 'Failed to save workout');
@@ -1574,7 +1606,7 @@ def serve_ui():
 
           groups.forEach(g => addExerciseBlock(g.exercise, g.sets));
           switchTab('log');
-          showFeedback('Loaded workout for editing.');
+          showSuccessModal('Edit Mode', 'Workout loaded into logger for updating.');
         }
 
         async function deleteWorkout(workoutId) {
@@ -1588,7 +1620,7 @@ def serve_ui():
           if (res.ok) {
             await loadHistory();
             await refreshExerciseOptions();
-            showFeedback('Workout deleted successfully.');
+            showSuccessModal('Workout Deleted', 'The past workout has been successfully removed.');
           } else {
             alert('Failed to delete workout.');
           }
@@ -1724,7 +1756,7 @@ def serve_ui():
             
             await refreshSavedFoods();
             loadNutrition();
-            showFeedback('Food item logged!');
+            showSuccessModal('Food Logged', 'Item added to your daily nutrition log.');
           } else {
             alert('Failed to log food item.');
           }
@@ -1737,7 +1769,7 @@ def serve_ui():
           });
           if (res.ok) {
             loadNutrition();
-            showFeedback('Food item removed.');
+            showSuccessModal('Item Removed', 'Food item deleted from your log.');
           } else {
             alert('Failed to delete item.');
           }
