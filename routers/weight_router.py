@@ -12,10 +12,20 @@ from models import BodyWeightCreate, BodyWeightLog, FoodLog, SetLog, User, Worko
 router = APIRouter(prefix="/api/weight", tags=["weight"])
 
 
-def _cutoff_date_str(range_key: str) -> Optional[str]:
-    today = datetime.now(timezone.utc).date()
+def _parse_reference_date(ref_date: Optional[str]) -> date:
+    if ref_date:
+        try:
+            return date.fromisoformat(ref_date.strip())
+        except ValueError:
+            pass
+    # Prefer local server date when available, falling back to UTC date
+    return datetime.now().astimezone().date()
+
+
+def _cutoff_date_str(range_key: str, ref_date: Optional[str] = None) -> Optional[str]:
+    anchor = _parse_reference_date(ref_date)
     days_map = {
-        "1d": 0,
+        "1d": 1,
         "1w": 7,
         "1m": 30,
         "3m": 90,
@@ -30,8 +40,7 @@ def _cutoff_date_str(range_key: str) -> Optional[str]:
             status_code=400,
             detail="Invalid range. Use 1d, 1w, 1m, 3m, 6m, 1y, or all.",
         )
-    return (today - timedelta(days=days_map[key])).isoformat()
-
+    return (anchor - timedelta(days=days_map[key])).isoformat()
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 def upsert_weight_log(
@@ -96,10 +105,11 @@ def upsert_weight_log(
 @router.get("")
 def get_weight_series(
     range: str = Query(default="1m"),
+    ref_date: Optional[str] = Query(default=None),
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    cutoff = _cutoff_date_str(range)
+    cutoff = _cutoff_date_str(range, ref_date=ref_date)
     stmt = (
         select(BodyWeightLog)
         .where(BodyWeightLog.user_id == current_user.id)
