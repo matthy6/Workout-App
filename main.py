@@ -437,7 +437,17 @@ def get_exercise_history(
     return results
 
 
-# --- Nutrition Endpoints ---
+# --- Nutrition & Saved Food Bank Endpoints ---
+
+
+class FoodBankUpsert(SQLModel):
+    food_name: str
+    reference_amount: float = 1.0
+    unit: Optional[str] = None
+    calories: float
+    protein: Optional[float] = 0.0
+    carbs: Optional[float] = 0.0
+    fats: Optional[float] = 0.0
 
 
 @app.get("/api/nutrition/foods")
@@ -452,6 +462,7 @@ def get_saved_foods(
     ).all()
     return [
         {
+            "id": str(f.id),
             "food_name": f.food_name,
             "unit": f.default_unit,
             "calories_per_unit": f.calories_per_unit,
@@ -461,6 +472,112 @@ def get_saved_foods(
         }
         for f in foods
     ]
+
+
+@app.post("/api/nutrition/foods", status_code=status.HTTP_201_CREATED)
+def create_or_upsert_saved_food(
+    payload: FoodBankUpsert,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    clean_name = payload.food_name.strip()
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Food name is required.")
+    if payload.reference_amount <= 0:
+        raise HTTPException(status_code=400, detail="Serving amount must be greater than 0.")
+
+    amt = payload.reference_amount
+    c_per_u = payload.calories / amt
+    p_per_u = (payload.protein or 0.0) / amt
+    carb_per_u = (payload.carbs or 0.0) / amt
+    f_per_u = (payload.fats or 0.0) / amt
+    clean_unit = payload.unit.strip() if payload.unit else None
+
+    existing = session.exec(
+        select(FoodDatabase).where(
+            FoodDatabase.user_id == current_user.id,
+            FoodDatabase.food_name.ilike(clean_name),
+        )
+    ).first()
+
+    if existing:
+        existing.food_name = clean_name
+        existing.default_unit = clean_unit
+        existing.calories_per_unit = c_per_u
+        existing.protein_per_unit = p_per_u
+        existing.carbs_per_unit = carb_per_u
+        existing.fats_per_unit = f_per_u
+        session.add(existing)
+        session.commit()
+        return {"status": "updated", "id": str(existing.id)}
+
+    new_item = FoodDatabase(
+        user_id=current_user.id,
+        food_name=clean_name,
+        default_unit=clean_unit,
+        calories_per_unit=c_per_u,
+        protein_per_unit=p_per_u,
+        carbs_per_unit=carb_per_u,
+        fats_per_unit=f_per_u,
+    )
+    session.add(new_item)
+    session.commit()
+    return {"status": "created", "id": str(new_item.id)}
+
+
+@app.put("/api/nutrition/foods/{food_db_id}")
+def update_saved_food(
+    food_db_id: UUID,
+    payload: FoodBankUpsert,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    item = session.exec(
+        select(FoodDatabase).where(
+            FoodDatabase.id == food_db_id,
+            FoodDatabase.user_id == current_user.id,
+        )
+    ).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Saved food item not found.")
+
+    clean_name = payload.food_name.strip()
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Food name is required.")
+    if payload.reference_amount <= 0:
+        raise HTTPException(status_code=400, detail="Serving amount must be greater than 0.")
+
+    amt = payload.reference_amount
+    item.food_name = clean_name
+    item.default_unit = payload.unit.strip() if payload.unit else None
+    item.calories_per_unit = payload.calories / amt
+    item.protein_per_unit = (payload.protein or 0.0) / amt
+    item.carbs_per_unit = (payload.carbs or 0.0) / amt
+    item.fats_per_unit = (payload.fats or 0.0) / amt
+
+    session.add(item)
+    session.commit()
+    return {"status": "updated", "id": str(item.id)}
+
+
+@app.delete("/api/nutrition/foods/{food_db_id}")
+def delete_saved_food(
+    food_db_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    item = session.exec(
+        select(FoodDatabase).where(
+            FoodDatabase.id == food_db_id,
+            FoodDatabase.user_id == current_user.id,
+        )
+    ).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Saved food item not found.")
+
+    session.delete(item)
+    session.commit()
+    return {"status": "deleted"}
 
 
 class FoodLogCreate(SQLModel):
@@ -985,7 +1102,7 @@ def list_workouts(
     return results
 
 
-# --- 7. Web Interface with Template Manager & Split Auto-Loader ---
+# --- 7. Web Interface with Saved Food Bank Manager ---
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1045,6 +1162,7 @@ def serve_ui():
         .macro-val { font-size: 16px; font-weight: 700; color: var(--text); }
         .macro-lbl { font-size: 11px; color: var(--muted); }
         .badge { font-size: 12px; background: #333; padding: 4px 8px; border-radius: 4px; color: var(--muted); }
+        .food-bank-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; background: #252525; padding: 9px 12px; border-radius: 8px; margin-bottom: 6px; border: 1px solid var(--border); }
         
         /* Confetti / Success Modal Overlay */
         .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: flex; justify-content: center; align-items: center; z-index: 9999; opacity: 0; pointer-events: none; transition: opacity 0.25s ease; }
@@ -1227,9 +1345,12 @@ def serve_ui():
           <div id="tab-nutrition" class="card hidden">
             <h2>Calorie & Macro Tracker</h2>
             
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:6px; margin-bottom:12px; flex-wrap:wrap;">
               <input type="date" id="nutrition-date" style="margin:0; width:auto;" onchange="loadNutrition()">
-              <button type="button" class="btn-small" style="background:#374151;" onclick="openTDEECalculator()">🧮 Calorie Calculator</button>
+              <div style="display:flex; gap:6px;">
+                <button type="button" class="btn-small" style="background: var(--accent);" onclick="scrollToFoodBank()">📚 Food Bank</button>
+                <button type="button" class="btn-small" style="background:#374151;" onclick="openTDEECalculator()">🧮 TDEE</button>
+              </div>
             </div>
 
             <!-- Daily Totals Summary -->
@@ -1253,7 +1374,7 @@ def serve_ui():
             </div>
 
             <!-- Quick Add Meal Form -->
-            <div style="background:#262626; padding:10px; border-radius:8px; border:1px solid var(--border); margin-bottom:12px;">
+            <div style="background:#262626; padding:10px; border-radius:8px; border:1px solid var(--border); margin-bottom:14px;">
               <h3 style="margin-bottom:8px; font-size:14px;">Log Food / Meal</h3>
               
               <input type="text" id="food-name" list="food-catalog-options" placeholder="Food name (e.g. White Rice)" style="margin-bottom:6px;" oninput="onFoodNameInput()">
@@ -1285,8 +1406,70 @@ def serve_ui():
             </div>
 
             <h3>Logged Items Today</h3>
-            <div id="nutrition-items-container">
+            <div id="nutrition-items-container" style="margin-bottom: 18px;">
               <p style="color: var(--muted)">No food logged for this date.</p>
+            </div>
+
+            <!-- Saved Food Item Bank Section -->
+            <div id="food-bank-section" style="border-top: 1px solid var(--border); padding-top: 16px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <h3 style="margin:0;">📚 Saved Food Bank</h3>
+                <button type="button" class="btn-small" style="background: var(--green);" onclick="openFoodBankEditor()">+ Add Food to Bank</button>
+              </div>
+              <p style="font-size:12px; color:var(--muted); margin: 0 0 10px 0;">
+                Saved foods auto-fill calories & macros when you type their name and amount above.
+              </p>
+
+              <!-- Add / Edit Food Bank Form -->
+              <div id="food-bank-editor" class="split-panel hidden" style="margin-bottom:12px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                  <strong id="fb-editor-title" style="font-size:14px;">Add Food to Bank</strong>
+                  <button type="button" class="btn-icon" onclick="closeFoodBankEditor()">Cancel</button>
+                </div>
+
+                <label for="fb-name">Food Name</label>
+                <input type="text" id="fb-name" placeholder="e.g. Chicken Breast (Cooked)">
+
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:6px;">
+                  <div>
+                    <label for="fb-amount">Serving Size Amount</label>
+                    <input type="number" id="fb-amount" placeholder="e.g. 100" step="any" value="1">
+                  </div>
+                  <div>
+                    <label for="fb-unit">Unit</label>
+                    <input type="text" id="fb-unit" list="unit-options" placeholder="e.g. grams, scoop">
+                  </div>
+                </div>
+
+                <div style="display:grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap:6px; margin-bottom:6px;">
+                  <div>
+                    <label for="fb-cal">Calories</label>
+                    <input type="number" id="fb-cal" placeholder="Cals" step="any" style="margin:0;">
+                  </div>
+                  <div>
+                    <label for="fb-pro">Protein (g)</label>
+                    <input type="number" id="fb-pro" placeholder="Pro" step="any" style="margin:0;">
+                  </div>
+                  <div>
+                    <label for="fb-carb">Carbs (g)</label>
+                    <input type="number" id="fb-carb" placeholder="Carb" step="any" style="margin:0;">
+                  </div>
+                  <div>
+                    <label for="fb-fat">Fats (g)</label>
+                    <input type="number" id="fb-fat" placeholder="Fat" step="any" style="margin:0;">
+                  </div>
+                </div>
+
+                <button type="button" onclick="saveFoodBankItem()" style="background: var(--green); margin-top:4px; margin-bottom:0;">💾 Save to Food Bank</button>
+              </div>
+
+              <!-- Search Filter -->
+              <input type="text" id="food-bank-search" placeholder="🔍 Search saved foods..." oninput="renderFoodBankList()" style="margin-bottom:10px; font-size:14px; padding:8px 10px;">
+
+              <!-- Saved Food Items List -->
+              <div id="food-bank-list-container">
+                <p style="color: var(--muted);">Loading saved foods...</p>
+              </div>
             </div>
           </div>
 
@@ -1328,6 +1511,7 @@ def serve_ui():
         let timerInterval = null;
         let editingWorkoutId = null;
         let editingTemplateId = null;
+        let editingFoodBankId = null;
         let modalTimeout = null;
 
         function showSuccessModal(title, message) {
@@ -1448,6 +1632,8 @@ def serve_ui():
           }
         }
 
+        // --- Saved Food Bank Functions ---
+
         async function refreshSavedFoods() {
           const res = await fetch('/api/nutrition/foods', { headers: getAuthHeaders() });
           if (res.ok) {
@@ -1455,6 +1641,184 @@ def serve_ui():
             document.getElementById('food-catalog-options').innerHTML = savedFoodsCatalog
               .map(f => `<option value="${f.food_name}">`)
               .join('');
+            renderFoodBankList();
+          }
+        }
+
+        function scrollToFoodBank() {
+          document.getElementById('food-bank-section').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function renderFoodBankList() {
+          const container = document.getElementById('food-bank-list-container');
+          if (!container) return;
+
+          const query = (document.getElementById('food-bank-search')?.value || '').trim().toLowerCase();
+          const filtered = query
+            ? savedFoodsCatalog.filter(f => f.food_name.toLowerCase().includes(query))
+            : savedFoodsCatalog;
+
+          if (filtered.length === 0) {
+            container.innerHTML = query
+              ? `<p style="color: var(--muted); font-size:13px;">No saved foods match "${query}".</p>`
+              : '<p style="color: var(--muted); font-size:13px;">No saved foods yet. Click "+ Add Food to Bank" or log a meal with an amount above.</p>';
+            return;
+          }
+
+          container.innerHTML = filtered.map(f => {
+            // Display clean reference portion (100g if unit is grams/ml, otherwise 1 unit)
+            const uLower = (f.unit || '').toLowerCase();
+            const mult = (uLower === 'grams' || uLower === 'g' || uLower === 'ml') ? 100 : 1;
+            const unitLabel = f.unit ? `${mult} ${f.unit}` : `${mult} serving`;
+
+            const cals = Math.round(f.calories_per_unit * mult);
+            const pro = Math.round((f.protein_per_unit * mult) * 10) / 10;
+            const carb = Math.round((f.carbs_per_unit * mult) * 10) / 10;
+            const fat = Math.round((f.fats_per_unit * mult) * 10) / 10;
+
+            return `
+              <div class="food-bank-item">
+                <div>
+                  <strong>${f.food_name}</strong>
+                  <span class="badge" style="margin-left:6px;">per ${unitLabel}</span>
+                  <div style="font-size:12px; color:var(--muted); margin-top:3px;">
+                    🔥 ${cals} cals | P: ${pro}g | C: ${carb}g | F: ${fat}g
+                  </div>
+                </div>
+                <div style="display:flex; gap:6px; flex-shrink:0;">
+                  <button type="button" class="btn-small" style="background: var(--accent); padding:6px 9px; font-size:12px;" title="Quick-fill into daily log" onclick="quickUseFoodBankItem('${f.id}')">Use</button>
+                  <button type="button" class="btn-edit" onclick="editFoodBankItem('${f.id}')">✏️ Edit</button>
+                  <button type="button" class="btn-delete-workout" onclick="deleteFoodBankItem('${f.id}')">🗑️ Delete</button>
+                </div>
+              </div>
+            `;
+          }).join('');
+        }
+
+        function quickUseFoodBankItem(foodId) {
+          const item = savedFoodsCatalog.find(f => f.id === foodId);
+          if (!item) return;
+
+          const uLower = (item.unit || '').toLowerCase();
+          const defaultAmt = (uLower === 'grams' || uLower === 'g' || uLower === 'ml') ? 100 : 1;
+
+          document.getElementById('food-name').value = item.food_name;
+          document.getElementById('food-amount').value = defaultAmt;
+          document.getElementById('food-unit').value = item.unit || '';
+          onFoodNameInput();
+          document.getElementById('tab-nutrition').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function openFoodBankEditor() {
+          editingFoodBankId = null;
+          document.getElementById('fb-editor-title').innerText = 'Add Food to Bank';
+          document.getElementById('fb-name').value = '';
+          document.getElementById('fb-amount').value = '100';
+          document.getElementById('fb-unit').value = 'grams';
+          document.getElementById('fb-cal').value = '';
+          document.getElementById('fb-pro').value = '';
+          document.getElementById('fb-carb').value = '';
+          document.getElementById('fb-fat').value = '';
+          document.getElementById('food-bank-editor').classList.remove('hidden');
+        }
+
+        function editFoodBankItem(foodId) {
+          const item = savedFoodsCatalog.find(f => f.id === foodId);
+          if (!item) return;
+
+          editingFoodBankId = item.id;
+          const uLower = (item.unit || '').toLowerCase();
+          const mult = (uLower === 'grams' || uLower === 'g' || uLower === 'ml') ? 100 : 1;
+
+          document.getElementById('fb-editor-title').innerText = `Edit: ${item.food_name}`;
+          document.getElementById('fb-name').value = item.food_name;
+          document.getElementById('fb-amount').value = mult;
+          document.getElementById('fb-unit').value = item.unit || '';
+          document.getElementById('fb-cal').value = Math.round(item.calories_per_unit * mult * 10) / 10;
+          document.getElementById('fb-pro').value = Math.round(item.protein_per_unit * mult * 10) / 10;
+          document.getElementById('fb-carb').value = Math.round(item.carbs_per_unit * mult * 10) / 10;
+          document.getElementById('fb-fat').value = Math.round(item.fats_per_unit * mult * 10) / 10;
+
+          const editor = document.getElementById('food-bank-editor');
+          editor.classList.remove('hidden');
+          editor.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function closeFoodBankEditor() {
+          editingFoodBankId = null;
+          document.getElementById('food-bank-editor').classList.add('hidden');
+        }
+
+        async function saveFoodBankItem() {
+          const foodName = document.getElementById('fb-name').value.trim();
+          const refAmt = parseFloat(document.getElementById('fb-amount').value);
+          const unit = document.getElementById('fb-unit').value.trim() || null;
+          const calories = parseFloat(document.getElementById('fb-cal').value);
+          const protein = parseFloat(document.getElementById('fb-pro').value) || 0;
+          const carbs = parseFloat(document.getElementById('fb-carb').value) || 0;
+          const fats = parseFloat(document.getElementById('fb-fat').value) || 0;
+
+          if (!foodName) {
+            alert('Please enter a food name.');
+            return;
+          }
+          if (isNaN(refAmt) || refAmt <= 0) {
+            alert('Please enter a serving size amount greater than 0.');
+            return;
+          }
+          if (isNaN(calories) || calories < 0) {
+            alert('Please enter valid calories.');
+            return;
+          }
+
+          const endpoint = editingFoodBankId
+            ? `/api/nutrition/foods/${editingFoodBankId}`
+            : '/api/nutrition/foods';
+          const method = editingFoodBankId ? 'PUT' : 'POST';
+
+          const res = await fetch(endpoint, {
+            method: method,
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+              food_name: foodName,
+              reference_amount: refAmt,
+              unit: unit,
+              calories: calories,
+              protein: protein,
+              carbs: carbs,
+              fats: fats
+            })
+          });
+
+          if (res.ok) {
+            const wasEditing = editingFoodBankId !== null;
+            closeFoodBankEditor();
+            await refreshSavedFoods();
+            showSuccessModal(
+              wasEditing ? 'Food Bank Updated ✏️' : 'Food Added to Bank 🎉',
+              `"${foodName}" is saved and ready for quick macro auto-fill.`
+            );
+          } else {
+            const err = await res.json();
+            alert(err.detail || 'Failed to save food item.');
+          }
+        }
+
+        async function deleteFoodBankItem(foodId) {
+          const item = savedFoodsCatalog.find(f => f.id === foodId);
+          if (!confirm(`Remove "${item ? item.food_name : 'this item'}" from your Saved Food Bank?`)) return;
+
+          const res = await fetch(`/api/nutrition/foods/${foodId}`, {
+            method: 'DELETE',
+            headers: getAuthHeaders()
+          });
+
+          if (res.ok) {
+            if (editingFoodBankId === foodId) closeFoodBankEditor();
+            await refreshSavedFoods();
+            showSuccessModal('Food Removed', 'Item deleted from your Saved Food Bank.');
+          } else {
+            alert('Failed to delete saved food item.');
           }
         }
 
