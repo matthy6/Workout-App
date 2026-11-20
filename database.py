@@ -28,7 +28,7 @@ def get_session():
 
 
 def run_safe_migrations():
-    """Ensure new split columns exist on existing SQLite/PostgreSQL user tables."""
+    """Ensure split and macro-target columns exist on existing SQLite/PostgreSQL user tables."""
     with engine.begin() as conn:
         if "sqlite" in DATABASE_URL:
             cols = [row[1] for row in conn.execute(text("PRAGMA table_info(user)")).fetchall()]
@@ -36,12 +36,32 @@ def run_safe_migrations():
                 conn.execute(text("ALTER TABLE user ADD COLUMN split_template_ids TEXT DEFAULT '[]'"))
             if "split_index" not in cols:
                 conn.execute(text("ALTER TABLE user ADD COLUMN split_index INTEGER DEFAULT 0"))
+            if "target_calories" not in cols:
+                conn.execute(text("ALTER TABLE user ADD COLUMN target_calories INTEGER"))
+            if "target_protein" not in cols:
+                conn.execute(text("ALTER TABLE user ADD COLUMN target_protein FLOAT"))
+            if "target_carbs" not in cols:
+                conn.execute(text("ALTER TABLE user ADD COLUMN target_carbs FLOAT"))
+            if "target_fats" not in cols:
+                conn.execute(text("ALTER TABLE user ADD COLUMN target_fats FLOAT"))
         else:
             conn.execute(
                 text('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS split_template_ids JSON DEFAULT \'[]\'::json')
             )
             conn.execute(
                 text('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS split_index INTEGER DEFAULT 0')
+            )
+            conn.execute(
+                text('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS target_calories INTEGER')
+            )
+            conn.execute(
+                text('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS target_protein DOUBLE PRECISION')
+            )
+            conn.execute(
+                text('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS target_carbs DOUBLE PRECISION')
+            )
+            conn.execute(
+                text('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS target_fats DOUBLE PRECISION')
             )
 
 
