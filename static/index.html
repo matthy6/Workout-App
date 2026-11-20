@@ -16,8 +16,8 @@
     input, select, textarea, button { width: 100%; padding: 10px; margin-bottom: 8px; border-radius: 6px; border: 1px solid var(--border); background: #2a2a2a; color: var(--text); font-size: 15px; }
     button { background: var(--accent); color: white; border: none; font-weight: 600; cursor: pointer; }
     button:hover { opacity: 0.9; }
-    .tab-bar { display: grid; grid-template-columns: repeat(6, 1fr); gap: 3px; background: var(--card); padding: 6px; border-radius: 10px; border: 1px solid var(--border); }
-    .tab-btn { margin: 0; padding: 8px 1px; font-size: 11px; background: transparent; color: var(--muted); border-radius: 7px; text-align: center; transition: background 0.15s, color 0.15s; }
+    .tab-bar { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; background: var(--card); padding: 6px; border-radius: 10px; border: 1px solid var(--border); }
+    .tab-btn { margin: 0; padding: 8px 1px; font-size: 10px; background: transparent; color: var(--muted); border-radius: 7px; text-align: center; transition: background 0.15s, color 0.15s; }
     .tab-btn.active { background: var(--accent); color: white; }
     .template-bar { display: grid; grid-template-columns: 1fr auto auto auto; gap: 6px; align-items: center; background: #262626; padding: 10px 12px; border-radius: 8px; margin-bottom: 10px; border: 1px solid var(--border); }
     .template-bar select { margin: 0; font-size: 14px; padding: 8px; }
@@ -26,7 +26,7 @@
     .split-item { display: flex; justify-content: space-between; align-items: center; gap: 6px; background: #1e1e1e; border: 1px solid #333; padding: 7px 10px; border-radius: 6px; margin-bottom: 6px; font-size: 13px; }
     .split-item.is-next { border-color: var(--green); background: rgba(22, 163, 74, 0.12); }
     .split-controls { display: flex; gap: 4px; }
-    .btn-icon { width: auto; padding: 4px 8px; font-size: 12px; margin: 0; background: #374151; }
+    .btn-icon { width: auto; padding: 5px 8px; font-size: 12px; margin: 0; background: #374151; }
     .time-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
     .timer-bar { display: flex; justify-content: space-between; align-items: center; background: #262626; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid var(--border); }
     .exercise-card { background: #252525; border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
@@ -53,8 +53,7 @@
     .macro-lbl { font-size: 11px; color: var(--muted); margin-top: 3px; }
     .badge { font-size: 12px; background: #333; padding: 4px 8px; border-radius: 4px; color: var(--muted); }
     .food-bank-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; background: #252525; padding: 9px 12px; border-radius: 8px; margin-bottom: 6px; border: 1px solid var(--border); }
-    
-    /* Confetti / Success Modal Overlay */
+
     .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: flex; justify-content: center; align-items: center; z-index: 9999; opacity: 0; pointer-events: none; transition: opacity 0.25s ease; }
     .modal-overlay.active { opacity: 1; pointer-events: auto; }
     .modal-card { background: #1f2937; border: 1px solid #374151; border-radius: 16px; padding: 28px 36px; text-align: center; max-width: 360px; width: 90%; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5); transform: scale(0.9); transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1); }
@@ -99,13 +98,14 @@
 
     <!-- Main App Screen -->
     <div id="app-screen" class="hidden" style="display:flex; flex-direction:column; gap:16px;">
-      
+
       <!-- Navigation Tabs -->
       <div class="tab-bar">
         <button type="button" id="tab-btn-log" class="tab-btn active" onclick="switchTab('log')">Log</button>
         <button type="button" id="tab-btn-templates" class="tab-btn" onclick="switchTab('templates')">Templates</button>
         <button type="button" id="tab-btn-nutrition" class="tab-btn" onclick="switchTab('nutrition')">Nutrition</button>
         <button type="button" id="tab-btn-nut-history" class="tab-btn" onclick="switchTab('nut-history')">Diet Hist</button>
+        <button type="button" id="tab-btn-weight" class="tab-btn" onclick="switchTab('weight')">Weight</button>
         <button type="button" id="tab-btn-history" class="tab-btn" onclick="switchTab('history')">Workouts</button>
         <button type="button" id="tab-btn-exercises" class="tab-btn" onclick="switchTab('exercises')">Exercises</button>
       </div>
@@ -156,7 +156,7 @@
             </div>
           </div>
         </div>
-        
+
         <!-- Live Session Timer -->
         <div class="timer-bar">
           <div>
@@ -167,7 +167,7 @@
         </div>
 
         <input type="text" id="workout-title" placeholder="Workout Title (e.g. Leg Day, Push Day)" value="Workout Session">
-        
+
         <!-- Start & End Time Inputs -->
         <div class="time-grid">
           <div>
@@ -185,12 +185,12 @@
         <h3>Exercises</h3>
         <datalist id="exercise-options"></datalist>
         <div id="exercises-container"></div>
-        
+
         <div class="action-row">
           <button type="button" onclick="addExerciseBlock('exercises-container')" style="background: #374151;">+ Add Exercise</button>
           <button type="button" onclick="saveAsTemplate()" style="background: #4b5563;">📋 Save as Template</button>
         </div>
-        
+
         <div id="logger-action-buttons">
           <button type="button" id="submit-workout-btn" onclick="submitWorkout()">Finish & Save Workout</button>
         </div>
@@ -203,7 +203,6 @@
           <button type="button" id="new-template-btn" class="btn-small" style="background: var(--green);" onclick="startNewTemplate()">+ New Template</button>
         </div>
 
-        <!-- Inline Template Editor Form -->
         <div id="template-editor-box" class="split-panel hidden" style="margin-bottom:16px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
             <strong id="template-editor-heading" style="font-size:15px;">Edit Template</strong>
@@ -225,7 +224,6 @@
           </div>
         </div>
 
-        <!-- Saved Templates List -->
         <div id="templates-list-container">
           <p style="color: var(--muted);">Loading templates...</p>
         </div>
@@ -234,7 +232,7 @@
       <!-- Tab 3: Nutrition & Calorie Tracker -->
       <div id="tab-nutrition" class="card hidden">
         <h2>Calorie & Macro Tracker</h2>
-        
+
         <div style="display:flex; justify-content:space-between; align-items:center; gap:6px; margin-bottom:12px; flex-wrap:wrap;">
           <input type="date" id="nutrition-date" style="margin:0; width:auto;" onchange="loadNutrition()">
           <div style="display:flex; gap:6px; flex-wrap:wrap;">
@@ -244,7 +242,6 @@
           </div>
         </div>
 
-        <!-- Daily Macro Targets Editor -->
         <div id="macro-targets-editor" class="split-panel hidden" style="margin-bottom:12px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
             <strong style="font-size:14px;">🎯 Daily Macro Targets</strong>
@@ -274,7 +271,6 @@
           <button type="button" onclick="saveMacroTargets()" style="background: var(--green); margin:0; padding:8px;">💾 Save Targets</button>
         </div>
 
-        <!-- Daily Totals vs Targets Summary -->
         <div class="macro-grid">
           <div class="macro-box">
             <div class="macro-val" id="tot-cal">0</div>
@@ -294,14 +290,12 @@
           </div>
         </div>
 
-        <!-- Quick Add Meal Form -->
         <div style="background:#262626; padding:10px; border-radius:8px; border:1px solid var(--border); margin-bottom:14px;">
           <h3 style="margin-bottom:8px; font-size:14px;">Log Food / Meal</h3>
-          
+
           <input type="text" id="food-name" list="food-catalog-options" placeholder="Food name (e.g. White Rice)" style="margin-bottom:6px;" oninput="onFoodNameInput()">
           <datalist id="food-catalog-options"></datalist>
-          
-          <!-- Amount & Unit Datalist Row -->
+
           <div style="display:grid; grid-template-columns: 1fr 1fr; gap:6px; margin-bottom:6px;">
             <input type="number" id="food-amount" placeholder="Amount (e.g. 150)" step="any" style="margin:0;" oninput="onFoodAmountInput()">
             <input type="text" id="food-unit" list="unit-options" placeholder="Unit (grams, oz, cups...)" style="margin:0;">
@@ -331,7 +325,6 @@
           <p style="color: var(--muted)">No food logged for this date.</p>
         </div>
 
-        <!-- Saved Food Item Bank Section -->
         <div id="food-bank-section" style="border-top: 1px solid var(--border); padding-top: 16px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
             <h3 style="margin:0;">📚 Saved Food Bank</h3>
@@ -341,7 +334,6 @@
             Saved foods auto-fill calories & macros when you type their name and amount above.
           </p>
 
-          <!-- Add / Edit Food Bank Form -->
           <div id="food-bank-editor" class="split-panel hidden" style="margin-bottom:12px;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
               <strong id="fb-editor-title" style="font-size:14px;">Add Food to Bank</strong>
@@ -384,10 +376,8 @@
             <button type="button" onclick="saveFoodBankItem()" style="background: var(--green); margin-top:4px; margin-bottom:0;">💾 Save to Food Bank</button>
           </div>
 
-          <!-- Search Filter -->
           <input type="text" id="food-bank-search" placeholder="🔍 Search saved foods..." oninput="renderFoodBankList()" style="margin-bottom:10px; font-size:14px; padding:8px 10px;">
 
-          <!-- Saved Food Items List -->
           <div id="food-bank-list-container">
             <p style="color: var(--muted);">Loading saved foods...</p>
           </div>
@@ -400,13 +390,55 @@
         <div id="nutrition-history-container">Loading diet history...</div>
       </div>
 
-      <!-- Tab 5: Past Workouts History -->
+      <!-- Tab 5: Body Weight Graph & Day Inspector -->
+      <div id="tab-weight" class="card hidden">
+        <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px;">
+          <div>
+            <div id="wt-headline" style="font-size:26px; font-weight:800;">--</div>
+            <div id="wt-delta" style="font-size:13px; color:var(--muted);">Log a weight to start tracking</div>
+          </div>
+          <div id="wt-range-bar" style="display:flex; gap:4px; flex-wrap:wrap;">
+            <button type="button" class="btn-icon wt-range-btn" data-range="1d" onclick="setWeightRange('1d')">1D</button>
+            <button type="button" class="btn-icon wt-range-btn" data-range="1w" onclick="setWeightRange('1w')">1W</button>
+            <button type="button" class="btn-icon wt-range-btn" data-range="1m" onclick="setWeightRange('1m')" style="background:var(--accent);">1M</button>
+            <button type="button" class="btn-icon wt-range-btn" data-range="3m" onclick="setWeightRange('3m')">3M</button>
+            <button type="button" class="btn-icon wt-range-btn" data-range="all" onclick="setWeightRange('all')">ALL</button>
+          </div>
+        </div>
+
+        <div style="margin:12px 0; background:#181818; border:1px solid var(--border); border-radius:10px; padding:8px;">
+          <svg id="weight-chart-svg" viewBox="0 0 560 200" style="width:100%; height:auto; display:block;"></svg>
+        </div>
+
+        <div style="background:#262626; padding:10px; border-radius:8px; border:1px solid var(--border); margin-bottom:14px;">
+          <h3 style="margin-bottom:8px; font-size:14px;">Log / Update Body Weight</h3>
+          <div style="display:grid; grid-template-columns: 1fr 1fr 80px; gap:6px; margin-bottom:6px;">
+            <input type="date" id="wt-date" style="margin:0;">
+            <input type="number" id="wt-value" placeholder="Weight (e.g. 215)" step="0.1" style="margin:0;">
+            <select id="wt-unit" style="margin:0;">
+              <option value="lbs">lbs</option>
+              <option value="kg">kg</option>
+            </select>
+          </div>
+          <input type="text" id="wt-notes" placeholder="Optional note (e.g. morning weigh-in, training day)..." style="margin-bottom:8px;">
+          <button type="button" onclick="saveWeightEntry()" style="background:var(--green); margin:0;">Save Weight</button>
+        </div>
+
+        <div id="wt-day-inspector" class="split-panel">
+          <strong style="font-size:14px;">📅 Click any day dot on the graph</strong>
+          <p style="font-size:13px; color:var(--muted); margin:6px 0 0 0;">
+            Inspect your recorded weight, diet macros/meals, and lifts for that exact date.
+          </p>
+        </div>
+      </div>
+
+      <!-- Tab 6: Past Workouts History -->
       <div id="tab-history" class="card hidden">
         <h2>Past Workouts</h2>
         <div id="history-container">Loading past workouts...</div>
       </div>
 
-      <!-- Tab 6: Exercise Performance History -->
+      <!-- Tab 7: Exercise Performance History -->
       <div id="tab-exercises" class="card hidden">
         <h2>Exercise Progress</h2>
         <div style="display:flex; gap:6px; margin-bottom:12px;">
@@ -430,11 +462,23 @@
     let userSplit = { template_ids: [], current_index: 0, next_template_id: null };
     let draftSplitIds = [];
     let draftSplitIndex = 0;
+    let weightRange = '1m';
+    let weightSeries = [];
+    let selectedWeightDate = null;
     let timerInterval = null;
     let editingWorkoutId = null;
     let editingTemplateId = null;
     let editingFoodBankId = null;
     let modalTimeout = null;
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
 
     function showSuccessModal(title, message) {
       document.getElementById('modal-title').innerText = title;
@@ -454,7 +498,7 @@
     }
 
     function switchTab(tabName) {
-      const tabs = ['log', 'templates', 'nutrition', 'nut-history', 'history', 'exercises'];
+      const tabs = ['log', 'templates', 'nutrition', 'nut-history', 'weight', 'history', 'exercises'];
       tabs.forEach(t => {
         document.getElementById(`tab-${t}`).classList.add('hidden');
         document.getElementById(`tab-btn-${t}`).classList.remove('active');
@@ -470,6 +514,12 @@
         refreshSavedFoods();
       } else if (tabName === 'nut-history') {
         loadNutritionHistory();
+      } else if (tabName === 'weight') {
+        const wtDateInput = document.getElementById('wt-date');
+        if (!wtDateInput.value) {
+          wtDateInput.value = toLocalDateString(new Date());
+        }
+        loadWeightChart();
       } else if (tabName === 'history') {
         loadHistory();
       }
@@ -549,7 +599,7 @@
       if (res.ok) {
         exerciseCatalog = await res.json();
         document.getElementById('exercise-options').innerHTML = exerciseCatalog
-          .map(e => `<option value="${e.name}">`)
+          .map(e => `<option value="${escapeHtml(e.name)}">`)
           .join('');
       }
     }
@@ -561,7 +611,7 @@
       if (res.ok) {
         savedFoodsCatalog = await res.json();
         document.getElementById('food-catalog-options').innerHTML = savedFoodsCatalog
-          .map(f => `<option value="${f.food_name}">`)
+          .map(f => `<option value="${escapeHtml(f.food_name)}">`)
           .join('');
         renderFoodBankList();
       }
@@ -582,7 +632,7 @@
 
       if (filtered.length === 0) {
         container.innerHTML = query
-          ? `<p style="color: var(--muted); font-size:13px;">No saved foods match "${query}".</p>`
+          ? `<p style="color: var(--muted); font-size:13px;">No saved foods match "${escapeHtml(query)}".</p>`
           : '<p style="color: var(--muted); font-size:13px;">No saved foods yet. Click "+ Add Food to Bank" or log a meal with an amount above.</p>';
         return;
       }
@@ -590,7 +640,7 @@
       container.innerHTML = filtered.map(f => {
         const uLower = (f.unit || '').toLowerCase();
         const mult = (uLower === 'grams' || uLower === 'g' || uLower === 'ml') ? 100 : 1;
-        const unitLabel = f.unit ? `${mult} ${f.unit}` : `${mult} serving`;
+        const unitLabel = f.unit ? `${mult} ${escapeHtml(f.unit)}` : `${mult} serving`;
 
         const cals = Math.round(f.calories_per_unit * mult);
         const pro = Math.round((f.protein_per_unit * mult) * 10) / 10;
@@ -600,14 +650,14 @@
         return `
           <div class="food-bank-item">
             <div>
-              <strong>${f.food_name}</strong>
+              <strong>${escapeHtml(f.food_name)}</strong>
               <span class="badge" style="margin-left:6px;">per ${unitLabel}</span>
               <div style="font-size:12px; color:var(--muted); margin-top:3px;">
                 🔥 ${cals} cals | P: ${pro}g | C: ${carb}g | F: ${fat}g
               </div>
             </div>
             <div style="display:flex; gap:6px; flex-shrink:0;">
-              <button type="button" class="btn-small" style="background: var(--accent); padding:6px 9px; font-size:12px;" title="Quick-fill into daily log" onclick="quickUseFoodBankItem('${f.id}')">Use</button>
+              <button type="button" class="btn-small" style="background: var(--accent); padding:6px 9px; font-size:12px;" onclick="quickUseFoodBankItem('${f.id}')">Use</button>
               <button type="button" class="btn-edit" onclick="editFoodBankItem('${f.id}')">✏️ Edit</button>
               <button type="button" class="btn-delete-workout" onclick="deleteFoodBankItem('${f.id}')">🗑️ Delete</button>
             </div>
@@ -761,7 +811,7 @@
     function onFoodAmountInput() {
       const amount = parseFloat(document.getElementById('food-amount').value);
       const nameInput = document.getElementById('food-name');
-      
+
       if (isNaN(amount) || amount <= 0 || !nameInput.dataset.calRate) return;
 
       const calRate = parseFloat(nameInput.dataset.calRate);
@@ -787,11 +837,11 @@
       const setItem = document.createElement('div');
       setItem.className = 'set-item';
 
-      const weightVal = prefill.weight !== null && prefill.weight !== undefined ? prefill.weight : '';
+      const weightVal = prefill.weight !== null && prefill.weight !== undefined ? escapeHtml(prefill.weight) : '';
       const unitVal = prefill.weight_unit || 'lbs';
       const repsVal = prefill.reps !== null && prefill.reps !== undefined ? prefill.reps : '';
       const rpeVal = prefill.rpe !== null && prefill.rpe !== undefined ? prefill.rpe : '';
-      const noteVal = prefill.notes ? prefill.notes.replace(/"/g, '&quot;') : '';
+      const noteVal = prefill.notes ? escapeHtml(prefill.notes) : '';
       const nextNum = setsList.children.length + 1;
 
       setItem.innerHTML = `
@@ -827,7 +877,7 @@
       const card = document.createElement('div');
       card.className = 'exercise-card';
 
-      const exVal = exerciseName ? exerciseName.replace(/"/g, '&quot;') : '';
+      const exVal = exerciseName ? escapeHtml(exerciseName) : '';
 
       card.innerHTML = `
         <div class="exercise-header">
@@ -889,7 +939,7 @@
       if (res.ok) {
         savedTemplates = await res.json();
         const optionsHtml = savedTemplates
-          .map(t => `<option value="${t.id}">${t.name} (${t.sets.length} sets)</option>`)
+          .map(t => `<option value="${t.id}">${escapeHtml(t.name)} (${t.sets.length} sets)</option>`)
           .join('');
 
         document.getElementById('template-select').innerHTML =
@@ -900,8 +950,6 @@
         renderTemplatesManagerList();
       }
     }
-
-    // --- Templates Manager (View / Edit / Delete) ---
 
     function renderTemplatesManagerList() {
       const container = document.getElementById('templates-list-container');
@@ -927,7 +975,7 @@
           <div class="history-item">
             <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:6px;">
               <div>
-                <strong style="font-size:16px;">${t.name}</strong>
+                <strong style="font-size:16px;">${escapeHtml(t.name)}</strong>
                 <span class="badge" style="margin-left:6px;">${t.sets.length} sets</span>
               </div>
               <div style="display:flex; gap:6px;">
@@ -936,20 +984,20 @@
                 <button type="button" class="btn-delete-workout" onclick="deleteTemplateById('${t.id}')">🗑️ Delete</button>
               </div>
             </div>
-            ${t.notes ? `<p style="font-size:13px; color:var(--muted); margin:4px 0;">${t.notes}</p>` : ''}
+            ${t.notes ? `<p style="font-size:13px; color:var(--muted); margin:4px 0;">${escapeHtml(t.notes)}</p>` : ''}
             <div style="margin-top:8px;">
               ${grouped.map(g => `
                 <div style="margin-bottom:6px;">
-                  <div style="font-weight:600; font-size:14px;">${g.exercise_name}</div>
+                  <div style="font-weight:600; font-size:14px;">${escapeHtml(g.exercise_name)}</div>
                   <ul style="margin:2px 0 0 18px; padding:0; font-size:13px; color:#d1d5db;">
                     ${g.sets.map((s, idx) => {
                       const unitDisplay = s.weight_unit === 'plate' ? 'plate' : (s.weight_unit || 'lbs');
-                      const weightStr = s.weight ? `${s.weight} ${unitDisplay}` : 'Bodyweight / Blank';
+                      const weightStr = s.weight ? `${escapeHtml(s.weight)} ${unitDisplay}` : 'Bodyweight / Blank';
                       const repsStr = s.reps ? ` × ${s.reps} reps` : '';
                       return `
                         <li style="margin-bottom:2px;">
                           Set ${idx + 1}: ${weightStr}${repsStr} ${s.rpe ? `(@ RPE ${s.rpe})` : ''}
-                          ${s.notes ? `<span style="color:var(--muted);"> — ${s.notes}</span>` : ''}
+                          ${s.notes ? `<span style="color:var(--muted);"> — ${escapeHtml(s.notes)}</span>` : ''}
                         </li>
                       `;
                     }).join('')}
@@ -1135,7 +1183,7 @@
       const total = userSplit.template_ids.length;
       const idx = (userSplit.current_index || 0) % total;
       const nextTpl = savedTemplates.find(t => t.id === userSplit.next_template_id);
-      const nextName = nextTpl ? nextTpl.name : 'Unknown Template';
+      const nextName = nextTpl ? escapeHtml(nextTpl.name) : 'Unknown Template';
 
       statusEl.innerHTML = `🔄 <strong>Split Day ${idx + 1}/${total}:</strong> ${nextName}`;
       banner.classList.remove('hidden');
@@ -1164,7 +1212,7 @@
       const activeIdx = draftSplitIndex % draftSplitIds.length;
       listEl.innerHTML = draftSplitIds.map((tid, idx) => {
         const tpl = savedTemplates.find(t => t.id === tid);
-        const name = tpl ? tpl.name : 'Deleted Template';
+        const name = tpl ? escapeHtml(tpl.name) : 'Deleted Template';
         const isNext = idx === activeIdx;
         return `
           <div class="split-item ${isNext ? 'is-next' : ''}">
@@ -1338,8 +1386,10 @@
       document.getElementById('user-controls').classList.remove('hidden');
       document.getElementById('user-badge').innerText = '@' + username;
 
+      const todayStr = toLocalDateString(new Date());
       document.getElementById('start-time').value = toLocalDatetimeInput(new Date());
-      document.getElementById('nutrition-date').value = toLocalDateString(new Date());
+      document.getElementById('nutrition-date').value = todayStr;
+      document.getElementById('wt-date').value = todayStr;
       switchTab('log');
 
       await Promise.all([refreshExerciseOptions(), refreshTemplates(), refreshSavedFoods()]);
@@ -1601,7 +1651,7 @@
         return `
           <div style="display:flex; justify-content:space-between; align-items:center; background:#252525; padding:8px 12px; border-radius:8px; margin-bottom:6px; border:1px solid var(--border);">
             <div>
-              <strong>${i.food_name}</strong> ${amtStr ? `<span style="font-size:13px; color:var(--muted);">(${amtStr.trim()})</span>` : ''}
+              <strong>${escapeHtml(i.food_name)}</strong> ${amtStr ? `<span style="font-size:13px; color:var(--muted);">(${escapeHtml(amtStr.trim())})</span>` : ''}
               <div style="font-size:12px; color:var(--muted);">🔥 ${i.calories} cals | P: ${i.protein}g | C: ${i.carbs}g | F: ${i.fats}g</div>
             </div>
             <button class="btn-del" onclick="deleteFoodItem('${i.id}')" style="padding:6px 10px;">✕</button>
@@ -1637,7 +1687,7 @@
               const amtStr = i.amount !== null && i.amount !== undefined ? `${i.amount} ${i.unit || ''}` : '';
               return `
                 <li style="margin-bottom:4px;">
-                  <strong>${i.food_name}</strong> ${amtStr ? `(${amtStr.trim()})` : ''}: 
+                  <strong>${escapeHtml(i.food_name)}</strong> ${amtStr ? `(${escapeHtml(amtStr.trim())})` : ''}:
                   🔥 ${i.calories} cals (P: ${i.protein}g, C: ${i.carbs}g, F: ${i.fats}g)
                 </li>
               `;
@@ -1686,7 +1736,7 @@
         document.getElementById('food-carb').value = '';
         document.getElementById('food-fat').value = '';
         delete document.getElementById('food-name').dataset.calRate;
-        
+
         await refreshSavedFoods();
         loadNutrition();
         showSuccessModal('Food Logged', 'Item added to your daily nutrition log.');
@@ -1712,12 +1762,12 @@
       const weightLbs = prompt('Enter your body weight in lbs (e.g. 215):', '215');
       if (!weightLbs) return;
       const weightKg = parseFloat(weightLbs) / 2.20462;
-      
+
       const bmr = (10 * weightKg) + (6.25 * 177) - (5 * 25) + 5;
       const tdee = Math.round(bmr * 1.55);
 
       const goal = prompt(`Estimated Maintenance (TDEE): ~${tdee} cals/day.\\n\\nSelect goal:\\n1. Bulk (+300 cals)\\n2. Cut (-500 cals)\\n3. Maintain`, '1');
-      
+
       let targetCal = tdee;
       if (goal === '1') targetCal += 300;
       else if (goal === '2') targetCal -= 500;
@@ -1733,6 +1783,188 @@
         document.getElementById('target-cal').value = targetCal;
         document.getElementById('target-pro').value = targetPro;
         saveMacroTargets();
+      }
+    }
+
+    // --- Body Weight Graph & Day Inspector Functions ---
+
+    function setWeightRange(rangeKey) {
+      weightRange = rangeKey;
+      document.querySelectorAll('.wt-range-btn').forEach(btn => {
+        btn.style.background = btn.dataset.range === rangeKey ? 'var(--accent)' : '#374151';
+      });
+      loadWeightChart();
+    }
+
+    async function loadWeightChart() {
+      const res = await fetch(`/api/weight?range=${encodeURIComponent(weightRange)}`, {
+        headers: getAuthHeaders()
+      });
+      if (!res.ok) return;
+      weightSeries = await res.json();
+
+      const headline = document.getElementById('wt-headline');
+      const deltaEl = document.getElementById('wt-delta');
+
+      if (!weightSeries.length) {
+        headline.innerText = '--';
+        deltaEl.innerText = 'No weight logs in this timeframe';
+        renderWeightSvg([]);
+        return;
+      }
+
+      const first = weightSeries[0];
+      const last = weightSeries[weightSeries.length - 1];
+      const diff = Math.round((last.weight - first.weight) * 10) / 10;
+      const pct = first.weight ? ((diff / first.weight) * 100).toFixed(1) : '0.0';
+      const sign = diff > 0 ? '+' : '';
+
+      headline.innerText = `${last.weight} ${escapeHtml(last.unit)}`;
+      deltaEl.innerHTML = `<span style="color:${diff >= 0 ? '#22c55e' : '#f87171'}; font-weight:600;">${sign}${diff} ${escapeHtml(last.unit)} (${sign}${pct}%)</span> over ${weightRange.toUpperCase()}`;
+
+      renderWeightSvg(weightSeries);
+      if (!selectedWeightDate || !weightSeries.some(p => p.date === selectedWeightDate)) {
+        inspectWeightDay(last.date);
+      } else {
+        inspectWeightDay(selectedWeightDate);
+      }
+    }
+
+    function renderWeightSvg(points) {
+      const svg = document.getElementById('weight-chart-svg');
+      if (!points.length) {
+        svg.innerHTML = `<text x="280" y="105" text-anchor="middle" fill="#9ca3af" font-size="14">No weight data points yet</text>`;
+        return;
+      }
+
+      const w = 560, h = 200, padX = 28, padY = 26;
+      const weights = points.map(p => p.weight);
+      const minW = Math.min(...weights);
+      const maxW = Math.max(...weights);
+      const span = maxW - minW || 1;
+
+      const coords = points.map((p, idx) => {
+        const x = points.length === 1
+          ? w / 2
+          : padX + (idx / (points.length - 1)) * (w - padX * 2);
+        const y = padY + (1 - (p.weight - minW) / span) * (h - padY * 2);
+        return { ...p, x, y };
+      });
+
+      const lineColor = coords[coords.length - 1].weight >= coords[0].weight ? '#22c55e' : '#f87171';
+      const polylinePts = coords.map(c => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ');
+
+      const dotsHtml = coords.map(c => {
+        const isSelected = c.date === selectedWeightDate;
+        return `
+          <g style="cursor:pointer;" onclick="inspectWeightDay('${c.date}')">
+            <circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="12" fill="transparent" />
+            <circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="${isSelected ? 7 : 4.5}" fill="${isSelected ? '#60a5fa' : lineColor}" stroke="#121212" stroke-width="2">
+              <title>${escapeHtml(c.date)}: ${c.weight} ${escapeHtml(c.unit)}</title>
+            </circle>
+          </g>
+        `;
+      }).join('');
+
+      svg.innerHTML = `
+        <text x="${padX}" y="15" fill="#9ca3af" font-size="11">High: ${maxW} ${escapeHtml(points[0].unit)}</text>
+        <text x="${w - padX}" y="15" text-anchor="end" fill="#9ca3af" font-size="11">Low: ${minW} ${escapeHtml(points[0].unit)}</text>
+        <polyline fill="none" stroke="${lineColor}" stroke-width="2.5" points="${polylinePts}" />
+        ${dotsHtml}
+      `;
+    }
+
+    async function inspectWeightDay(dateStr) {
+      selectedWeightDate = dateStr;
+      renderWeightSvg(weightSeries);
+
+      const box = document.getElementById('wt-day-inspector');
+      box.innerHTML = `<p style="font-size:13px; color:var(--muted); margin:0;">Loading ${escapeHtml(dateStr)}...</p>`;
+
+      const res = await fetch(`/api/weight/day?date=${encodeURIComponent(dateStr)}`, {
+        headers: getAuthHeaders()
+      });
+      if (!res.ok) return;
+      const day = await res.json();
+
+      const wtText = day.weight_entry
+        ? `<strong>${day.weight_entry.weight} ${escapeHtml(day.weight_entry.unit)}</strong>${day.weight_entry.notes ? ` — <span style="color:var(--muted);">${escapeHtml(day.weight_entry.notes)}</span>` : ''}`
+        : `<span style="color:var(--muted);">No weight logged</span>`;
+
+      const n = day.nutrition.totals;
+      const foodItemsHtml = day.nutrition.items.length
+        ? `<ul style="margin:6px 0 0 16px; padding:0; font-size:13px;">${day.nutrition.items.map(i => `<li>${escapeHtml(i.food_name)} (${i.amount ?? ''} ${escapeHtml(i.unit || '')}) — ${i.calories} kcal, P: ${i.protein}g</li>`).join('')}</ul>`
+        : `<div style="font-size:12px; color:var(--muted); margin-top:4px;">No meals logged</div>`;
+
+      const liftsHtml = day.workouts.length
+        ? day.workouts.map(w => `
+            <div style="margin-top:6px;">
+              <strong style="font-size:13px;">${escapeHtml(w.title)}</strong>
+              <ul style="margin:4px 0 0 16px; padding:0; font-size:12px; color:#d1d5db;">
+                ${w.sets.map(s => `<li>${escapeHtml(s.exercise)}: ${escapeHtml(s.weight)} ${escapeHtml(s.weight_unit || 'lbs')} × ${s.reps} ${s.rpe ? `@ RPE ${s.rpe}` : ''}</li>`).join('')}
+              </ul>
+            </div>
+          `).join('')
+        : `<div style="font-size:12px; color:var(--muted); margin-top:4px;">No lifts logged</div>`;
+
+      box.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <strong style="font-size:15px;">📅 ${escapeHtml(day.date)}</strong>
+          ${day.weight_entry ? `<button type="button" class="btn-icon" style="background:#dc2626;" onclick="deleteWeightEntry('${day.weight_entry.id}')">Delete Weight</button>` : ''}
+        </div>
+        <div style="font-size:13px; margin-bottom:10px;">⚖️ <strong>Weight:</strong> ${wtText}</div>
+        <div style="border-top:1px solid var(--border); padding-top:8px; margin-bottom:10px;">
+          <div style="font-size:13px;">🥗 <strong>Diet:</strong> 🔥 ${n.calories} kcal | P: ${n.protein}g | C: ${n.carbs}g | F: ${n.fats}g</div>
+          ${foodItemsHtml}
+        </div>
+        <div style="border-top:1px solid var(--border); padding-top:8px;">
+          <div style="font-size:13px;">🏋️ <strong>Lifts:</strong></div>
+          ${liftsHtml}
+        </div>
+      `;
+    }
+
+    async function saveWeightEntry() {
+      const dateVal = document.getElementById('wt-date').value;
+      const weightVal = parseFloat(document.getElementById('wt-value').value);
+      const unitVal = document.getElementById('wt-unit').value;
+      const notesVal = document.getElementById('wt-notes').value.trim();
+
+      if (!dateVal || isNaN(weightVal) || weightVal <= 0) {
+        alert('Enter a valid date and body weight.');
+        return;
+      }
+
+      const res = await fetch('/api/weight', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          date: dateVal,
+          weight: weightVal,
+          unit: unitVal,
+          notes: notesVal || null
+        })
+      });
+
+      if (res.ok) {
+        selectedWeightDate = dateVal;
+        document.getElementById('wt-notes').value = '';
+        await loadWeightChart();
+        showSuccessModal('Weight Saved ⚖️', `Logged ${weightVal} ${unitVal} for ${dateVal}.`);
+      } else {
+        const err = await res.json();
+        alert(err.detail || 'Failed to save weight entry.');
+      }
+    }
+
+    async function deleteWeightEntry(entryId) {
+      const res = await fetch(`/api/weight/${entryId}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      });
+      if (res.ok) {
+        await loadWeightChart();
+        showSuccessModal('Weight Removed', 'Weight entry deleted.');
       }
     }
 
@@ -1774,26 +2006,26 @@
           <div class="history-item">
             <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:6px;">
               <div>
-                <strong>${w.title}</strong>
-                <div style="font-size:12px; color:var(--muted);">${formatTimeRange(w)}</div>
+                <strong>${escapeHtml(w.title)}</strong>
+                <div style="font-size:12px; color:var(--muted);">${escapeHtml(formatTimeRange(w))}</div>
               </div>
               <div style="display:flex; gap:6px;">
                 <button type="button" class="btn-edit" onclick="editWorkout('${w.id}')">✏️ Edit</button>
                 <button type="button" class="btn-delete-workout" onclick="deleteWorkout('${w.id}')">🗑️ Delete</button>
               </div>
             </div>
-            ${w.notes ? `<p style="font-size:13px; color:var(--muted); margin:4px 0;">${w.notes}</p>` : ''}
+            ${w.notes ? `<p style="font-size:13px; color:var(--muted); margin:4px 0;">${escapeHtml(w.notes)}</p>` : ''}
             <div style="margin-top:8px;">
               ${grouped.map(g => `
                 <div style="margin-bottom:6px;">
-                  <div style="font-weight:600; font-size:14px;">${g.exercise}</div>
+                  <div style="font-weight:600; font-size:14px;">${escapeHtml(g.exercise)}</div>
                   <ul style="margin:2px 0 0 18px; padding:0; font-size:13px; color:#d1d5db;">
                     ${g.sets.map((s, idx) => {
                       const unitDisplay = s.weight_unit === 'plate' ? 'plate' : (s.weight_unit || 'lbs');
                       return `
                         <li style="margin-bottom:2px;">
-                          Set ${idx + 1}: ${s.weight} ${unitDisplay} × ${s.reps} reps ${s.rpe ? `(@ RPE ${s.rpe})` : ''}
-                          ${s.notes ? `<span style="color:var(--muted);"> — ${s.notes}</span>` : ''}
+                          Set ${idx + 1}: ${escapeHtml(s.weight)} ${unitDisplay} × ${s.reps} reps ${s.rpe ? `(@ RPE ${s.rpe})` : ''}
+                          ${s.notes ? `<span style="color:var(--muted);"> — ${escapeHtml(s.notes)}</span>` : ''}
                         </li>
                       `;
                     }).join('')}
@@ -1829,23 +2061,23 @@
       const history = await res.json();
 
       if (history.length === 0) {
-        container.innerHTML = `<p style="color: var(--muted)">No recorded performances found for "${exerciseName}".</p>`;
+        container.innerHTML = `<p style="color: var(--muted)">No recorded performances found for "${escapeHtml(exerciseName)}".</p>`;
         return;
       }
 
       container.innerHTML = history.map(h => `
         <div class="history-item">
           <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
-            <strong>${h.workout_title}</strong>
-            <span class="badge">${h.date}</span>
+            <strong>${escapeHtml(h.workout_title)}</strong>
+            <span class="badge">${escapeHtml(h.date)}</span>
           </div>
           <ul style="margin: 6px 0 0 16px; padding:0; font-size:14px;">
             ${h.sets.map((s, idx) => {
               const unitDisplay = s.weight_unit === 'plate' ? 'plate' : (s.weight_unit || 'lbs');
               return `
                 <li style="margin-bottom:4px;">
-                  Set ${idx + 1}: <strong>${s.weight} ${unitDisplay}</strong> × <strong>${s.reps} reps</strong> ${s.rpe ? `(@ RPE ${s.rpe})` : ''}
-                  ${s.notes ? `<div style="font-size:12px; color:var(--muted); margin-top:2px;">↳ ${s.notes}</div>` : ''}
+                  Set ${idx + 1}: <strong>${escapeHtml(s.weight)} ${unitDisplay}</strong> × <strong>${s.reps} reps</strong> ${s.rpe ? `(@ RPE ${s.rpe})` : ''}
+                  ${s.notes ? `<div style="font-size:12px; color:var(--muted); margin-top:2px;">↳ ${escapeHtml(s.notes)}</div>` : ''}
                 </li>
               `;
             }).join('')}

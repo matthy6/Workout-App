@@ -26,6 +26,7 @@ class User(SQLModel, table=True):
     templates: List["WorkoutTemplate"] = Relationship(back_populates="user")
     food_logs: List["FoodLog"] = Relationship(back_populates="user")
     saved_foods: List["FoodDatabase"] = Relationship(back_populates="user")
+    body_weights: List["BodyWeightLog"] = Relationship(back_populates="user")
 
 
 class Exercise(SQLModel, table=True):
@@ -120,6 +121,18 @@ class FoodDatabase(SQLModel, table=True):
     user: Optional[User] = Relationship(back_populates="saved_foods")
 
 
+class BodyWeightLog(SQLModel, table=True):
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: UUID = Field(foreign_key="user.id", index=True)
+    date: str = Field(index=True)  # YYYY-MM-DD format
+    weight: float
+    unit: str = Field(default="lbs")
+    notes: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    user: Optional[User] = Relationship(back_populates="body_weights")
+
+
 # --- Request / Payload Schemas ---
 
 
@@ -159,6 +172,13 @@ class FoodLogCreate(SQLModel):
     protein: Optional[float] = 0.0
     carbs: Optional[float] = 0.0
     fats: Optional[float] = 0.0
+
+
+class BodyWeightCreate(SQLModel):
+    date: str
+    weight: float
+    unit: Optional[str] = "lbs"
+    notes: Optional[str] = None
 
 
 class TemplateSetInput(SQLModel):
