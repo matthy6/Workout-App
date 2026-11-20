@@ -103,31 +103,49 @@ def upsert_weight_log(
 
 @router.get("")
 def get_weight_series(
-    range: str = Query(default="1m"),
+    range: str = Query(default="1w"),
     ref_date: Optional[str] = Query(default=None),
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
     cutoff = _cutoff_date_str(range, ref_date=ref_date)
-    stmt = (
+    all_entries = session.exec(
         select(BodyWeightLog)
         .where(BodyWeightLog.user_id == current_user.id)
         .order_by(BodyWeightLog.date.asc())
-    )
-    if cutoff:
-        stmt = stmt.where(BodyWeightLog.date >= cutoff)
+    ).all()
 
-    entries = session.exec(stmt).all()
-    return [
-        {
-            "id": str(e.id),
-            "date": e.date,
-            "weight": e.weight,
-            "unit": e.unit,
-            "notes": e.notes,
-        }
-        for e in entries
-    ]
+    if not cutoff:
+        filtered = all_entries
+        baseline = None
+    else:
+        filtered = [e for e in all_entries if e.date >= cutoff]
+        prior = [e for e in all_entries if e.date < cutoff]
+        baseline = prior[-1] if prior else None
+
+    return {
+        "entries": [
+            {
+                "id": str(e.id),
+                "date": e.date,
+                "weight": e.weight,
+                "unit": e.unit,
+                "notes": e.notes,
+            }
+            for e in filtered
+        ],
+        "baseline": (
+            {
+                "id": str(baseline.id),
+                "date": baseline.date,
+                "weight": baseline.weight,
+                "unit": baseline.unit,
+                "notes": baseline.notes,
+            }
+            if baseline
+            else None
+        ),
+    }
 
 
 @router.get("/day")

@@ -1802,7 +1802,10 @@
         { headers: getAuthHeaders() }
       );
       if (!res.ok) return;
-      weightSeries = await res.json();
+
+      const payload = await res.json();
+      weightSeries = Array.isArray(payload) ? payload : (payload.entries || []);
+      const baseline = Array.isArray(payload) ? null : payload.baseline;
 
       const headline = document.getElementById('wt-headline');
       const deltaEl = document.getElementById('wt-delta');
@@ -1814,14 +1817,22 @@
         return;
       }
 
-      const first = weightSeries[0];
       const last = weightSeries[weightSeries.length - 1];
-      const diff = Math.round((last.weight - first.weight) * 10) / 10;
-      const pct = first.weight ? ((diff / first.weight) * 100).toFixed(1) : '0.0';
+      const startPoint = weightSeries.length > 1 ? weightSeries[0] : (baseline || weightSeries[0]);
+      const diff = Math.round((last.weight - startPoint.weight) * 10) / 10;
+      const pct = startPoint.weight ? ((diff / startPoint.weight) * 100).toFixed(2) : '0.00';
       const sign = diff > 0 ? '+' : '';
+      const color = diff > 0 ? '#22c55e' : (diff < 0 ? '#f87171' : '#9ca3af');
+      const rangeLabels = {
+        '1w': 'past 1W',
+        '1m': 'past 1M',
+        '3m': 'past 3M',
+        'all': 'all time'
+      };
+      const periodLabel = rangeLabels[weightRange] || weightRange.toUpperCase();
 
       headline.innerText = `${last.weight} ${escapeHtml(last.unit)}`;
-      deltaEl.innerHTML = `<span style="color:${diff >= 0 ? '#22c55e' : '#f87171'}; font-weight:600;">${sign}${diff} ${escapeHtml(last.unit)} (${sign}${pct}%)</span> over ${weightRange.toUpperCase()}`;
+      deltaEl.innerHTML = `<span style="color:${color}; font-weight:700;">${sign}${diff} ${escapeHtml(last.unit)} (${sign}${pct}%)</span> <span style="color:var(--muted);">${periodLabel}</span>`;
 
       renderWeightSvg(weightSeries);
       if (!selectedWeightDate || !weightSeries.some(p => p.date === selectedWeightDate)) {
