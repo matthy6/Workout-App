@@ -394,6 +394,7 @@ def update_workout(
     workout.notes = payload.notes
     if payload.started_at:
         workout.started_at = payload.started_at
+        workout.date = payload.started_at
     if payload.ended_at:
         workout.ended_at = payload.ended_at
 

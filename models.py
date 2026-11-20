@@ -17,6 +17,10 @@ class User(SQLModel, table=True):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     split_template_ids: List[str] = Field(default_factory=list, sa_column=Column(JSON))
     split_index: int = Field(default=0)
+    target_calories: Optional[int] = None
+    target_protein: Optional[float] = None
+    target_carbs: Optional[float] = None
+    target_fats: Optional[float] = None
 
     workouts: List["WorkoutSession"] = Relationship(back_populates="user")
     templates: List["WorkoutTemplate"] = Relationship(back_populates="user")
@@ -127,6 +131,13 @@ class AuthPayload(SQLModel):
 class SplitUpdatePayload(SQLModel):
     template_ids: List[str]
     current_index: Optional[int] = 0
+
+
+class MacroTargetsPayload(SQLModel):
+    target_calories: Optional[int] = None
+    target_protein: Optional[float] = None
+    target_carbs: Optional[float] = None
+    target_fats: Optional[float] = None
 
 
 class FoodBankUpsert(SQLModel):
