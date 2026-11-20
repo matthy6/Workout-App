@@ -492,39 +492,36 @@
       }, 3000);
     }
 
-    async function loadWeightChart() {
-      const refDate = document.getElementById('wt-date')?.value || toLocalDateString(new Date());
-      const res = await fetch(
-        `/api/weight?range=${encodeURIComponent(weightRange)}&ref_date=${encodeURIComponent(refDate)}`,
-        { headers: getAuthHeaders() }
-      );
-      if (!res.ok) return;
-      weightSeries = await res.json();
+    function closeSuccessModal() {
+      const modal = document.getElementById('success-modal');
+      modal.classList.remove('active');
+    }
 
-      const headline = document.getElementById('wt-headline');
-      const deltaEl = document.getElementById('wt-delta');
+    function switchTab(tabName) {
+      const tabs = ['log', 'templates', 'nutrition', 'nut-history', 'weight', 'history', 'exercises'];
+      tabs.forEach(t => {
+        document.getElementById(`tab-${t}`).classList.add('hidden');
+        document.getElementById(`tab-btn-${t}`).classList.remove('active');
+      });
 
-      if (!weightSeries.length) {
-        headline.innerText = '--';
-        deltaEl.innerText = 'No weight logs in this timeframe';
-        renderWeightSvg([]);
-        return;
-      }
+      document.getElementById(`tab-${tabName}`).classList.remove('hidden');
+      document.getElementById(`tab-btn-${tabName}`).classList.add('active');
 
-      const first = weightSeries[0];
-      const last = weightSeries[weightSeries.length - 1];
-      const diff = Math.round((last.weight - first.weight) * 10) / 10;
-      const pct = first.weight ? ((diff / first.weight) * 100).toFixed(1) : '0.0';
-      const sign = diff > 0 ? '+' : '';
-
-      headline.innerText = `${last.weight} ${escapeHtml(last.unit)}`;
-      deltaEl.innerHTML = `<span style="color:${diff >= 0 ? '#22c55e' : '#f87171'}; font-weight:600;">${sign}${diff} ${escapeHtml(last.unit)} (${sign}${pct}%)</span> over ${weightRange.toUpperCase()}`;
-
-      renderWeightSvg(weightSeries);
-      if (!selectedWeightDate || !weightSeries.some(p => p.date === selectedWeightDate)) {
-        inspectWeightDay(last.date);
-      } else {
-        inspectWeightDay(selectedWeightDate);
+      if (tabName === 'templates') {
+        renderTemplatesManagerList();
+      } else if (tabName === 'nutrition') {
+        loadNutrition();
+        refreshSavedFoods();
+      } else if (tabName === 'nut-history') {
+        loadNutritionHistory();
+      } else if (tabName === 'weight') {
+        const wtDateInput = document.getElementById('wt-date');
+        if (!wtDateInput.value) {
+          wtDateInput.value = toLocalDateString(new Date());
+        }
+        loadWeightChart();
+      } else if (tabName === 'history') {
+        loadHistory();
       }
     }
 
@@ -1800,9 +1797,11 @@
     }
 
     async function loadWeightChart() {
-      const res = await fetch(`/api/weight?range=${encodeURIComponent(weightRange)}`, {
-        headers: getAuthHeaders()
-      });
+      const refDate = document.getElementById('wt-date')?.value || toLocalDateString(new Date());
+      const res = await fetch(
+        `/api/weight?range=${encodeURIComponent(weightRange)}&ref_date=${encodeURIComponent(refDate)}`,
+        { headers: getAuthHeaders() }
+      );
       if (!res.ok) return;
       weightSeries = await res.json();
 
