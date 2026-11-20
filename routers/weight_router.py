@@ -24,7 +24,6 @@ def _parse_reference_date(ref_date: Optional[str]) -> date:
 def _cutoff_date_str(range_key: str, ref_date: Optional[str] = None) -> Optional[str]:
     anchor = _parse_reference_date(ref_date)
     days_map = {
-        "1d": 1,
         "1w": 7,
         "1m": 30,
         "3m": 90,
@@ -37,7 +36,7 @@ def _cutoff_date_str(range_key: str, ref_date: Optional[str] = None) -> Optional
     if key not in days_map:
         raise HTTPException(
             status_code=400,
-            detail="Invalid range. Use 1d, 1w, 1m, 3m, 6m, 1y, or all.",
+            detail="Invalid range. Use 1w, 1m, 3m, 6m, 1y, or all.",
         )
     return (anchor - timedelta(days=days_map[key])).isoformat()
 
