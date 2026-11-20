@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from typing import Optional
 from uuid import UUID
 
@@ -18,7 +18,6 @@ def _parse_reference_date(ref_date: Optional[str]) -> date:
             return date.fromisoformat(ref_date.strip())
         except ValueError:
             pass
-    # Prefer local server date when available, falling back to UTC date
     return datetime.now().astimezone().date()
 
 
@@ -41,6 +40,7 @@ def _cutoff_date_str(range_key: str, ref_date: Optional[str] = None) -> Optional
             detail="Invalid range. Use 1d, 1w, 1m, 3m, 6m, 1y, or all.",
         )
     return (anchor - timedelta(days=days_map[key])).isoformat()
+
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 def upsert_weight_log(
