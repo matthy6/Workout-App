@@ -293,6 +293,49 @@
           </div>
         </div>
 
+        <div id="goal-calorie-planner" class="split-panel" style="margin-bottom:14px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <strong style="font-size:14px;">🎯 Goal Weight & Timeframe Planner</strong>
+          </div>
+
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:6px; margin-bottom:6px;">
+            <div>
+              <label for="goal-maint-cal">Maintenance (kcal/day)</label>
+              <input type="number" id="goal-maint-cal" placeholder="e.g. 2800" step="1" style="margin:0;" oninput="calculateGoalCalories()">
+            </div>
+            <div>
+              <label for="goal-start-wt">Current Weight (lbs)</label>
+              <input type="number" id="goal-start-wt" placeholder="e.g. 215" step="0.1" style="margin:0;" oninput="calculateGoalCalories()">
+            </div>
+          </div>
+
+          <div style="display:grid; grid-template-columns: 1fr 1fr 90px; gap:6px; margin-bottom:8px;">
+            <div>
+              <label for="goal-target-wt">Goal Weight (lbs)</label>
+              <input type="number" id="goal-target-wt" placeholder="e.g. 220" step="0.1" style="margin:0;" oninput="calculateGoalCalories()">
+            </div>
+            <div>
+              <label for="goal-timeframe-val">Timeframe</label>
+              <input type="number" id="goal-timeframe-val" placeholder="e.g. 8" min="1" step="1" style="margin:0;" oninput="calculateGoalCalories()">
+            </div>
+            <div>
+              <label for="goal-timeframe-unit">Unit</label>
+              <select id="goal-timeframe-unit" style="margin:0;" onchange="calculateGoalCalories()">
+                <option value="weeks" selected>weeks</option>
+                <option value="days">days</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="goal-cal-result" style="background:#1e1e1e; border:1px solid var(--border); border-radius:8px; padding:10px; font-size:13px; color:var(--muted); margin-bottom:8px;">
+            Enter maintenance calories, current weight, goal weight, and timeframe to calculate daily intake.
+          </div>
+
+          <button type="button" id="apply-goal-cal-btn" class="hidden" onclick="applyGoalCaloriesToTarget()" style="background:var(--accent); margin:0; padding:8px; font-size:13px;">
+            Use as Daily Calorie Target
+          </button>
+        </div>
+
         <div style="background:#262626; padding:10px; border-radius:8px; border:1px solid var(--border); margin-bottom:14px;">
           <h3 style="margin-bottom:8px; font-size:14px;">Log Food / Meal</h3>
 
@@ -2293,7 +2336,77 @@
         </div>
       `).join('');
     }
+    let computedGoalCalories = null;
 
+    function calculateGoalCalories() {
+      const maint = parseFloat(document.getElementById('goal-maint-cal')?.value);
+      const startWt = parseFloat(document.getElementById('goal-start-wt')?.value);
+      const targetWt = parseFloat(document.getElementById('goal-target-wt')?.value);
+      const tfVal = parseFloat(document.getElementById('goal-timeframe-val')?.value);
+      const tfUnit = document.getElementById('goal-timeframe-unit')?.value || 'weeks';
+
+      const resultEl = document.getElementById('goal-cal-result');
+      const applyBtn = document.getElementById('apply-goal-cal-btn');
+
+      if (
+        isNaN(maint) || maint <= 0 ||
+        isNaN(startWt) || startWt <= 0 ||
+        isNaN(targetWt) || targetWt <= 0 ||
+        isNaN(tfVal) || tfVal <= 0
+      ) {
+        computedGoalCalories = null;
+        applyBtn.classList.add('hidden');
+        resultEl.innerHTML = 'Enter maintenance calories, current weight, goal weight, and timeframe to calculate daily intake.';
+        return;
+      }
+
+      const totalDays = tfUnit === 'weeks' ? Math.round(tfVal * 7) : Math.round(tfVal);
+      const weightDelta = targetWt - startWt;
+      const totalCalDelta = weightDelta * 3500;
+      const avgDailyDiff = Math.round(totalCalDelta / totalDays);
+      const goalDailyIntake = Math.max(0, Math.round(maint + avgDailyDiff));
+
+      computedGoalCalories = goalDailyIntake;
+
+      const sign = avgDailyDiff > 0 ? '+' : '';
+      const diffColor = avgDailyDiff > 0 ? '#22c55e' : (avgDailyDiff < 0 ? '#f87171' : '#9ca3af');
+      const wtSign = weightDelta > 0 ? '+' : '';
+      const periodLabel = tfUnit === 'weeks'
+        ? `${tfVal} ${tfVal === 1 ? 'week' : 'weeks'} (${totalDays} days)`
+        : `${totalDays} ${totalDays === 1 ? 'day' : 'days'}`;
+
+      resultEl.innerHTML = `
+        <div style="margin-bottom:4px; color:var(--text);">
+          <strong>Weight Change:</strong> ${wtSign}${Math.round(weightDelta * 10) / 10} lbs over <strong>${periodLabel}</strong>
+        </div>
+        <div style="margin-bottom:4px;">
+          <strong>Avg. Daily Difference vs. Maintenance:</strong>
+          <span style="color:${diffColor}; font-weight:700;">${sign}${avgDailyDiff} kcal/day</span>
+        </div>
+        <div style="font-size:15px; color:var(--text);">
+          <strong>Goal Caloric Intake:</strong> <span style="font-weight:800; color:#60a5fa;">${goalDailyIntake} kcal/day</span>
+        </div>
+      `;
+
+      applyBtn.classList.remove('hidden');
+    }
+
+function applyGoalCaloriesToTarget() {
+  if (computedGoalCalories === null) return;
+  document.getElementById('target-cal').value = computedGoalCalories;
+  populateTargetInputsFromEditor();
+  saveMacroTargets();
+}
+
+function populateTargetInputsFromEditor() {
+  const proRaw = document.getElementById('target-pro')?.value;
+  const carbRaw = document.getElementById('target-carb')?.value;
+  const fatRaw = document.getElementById('target-fat')?.value;
+  macroTargets.target_calories = computedGoalCalories;
+  if (proRaw !== '') macroTargets.target_protein = parseFloat(proRaw);
+  if (carbRaw !== '') macroTargets.target_carbs = parseFloat(carbRaw);
+  if (fatRaw !== '') macroTargets.target_fats = parseFloat(fatRaw);
+}
     init();
   </script>
 </body>
