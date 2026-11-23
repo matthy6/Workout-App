@@ -322,6 +322,7 @@
               <label for="goal-timeframe-unit">Unit</label>
               <select id="goal-timeframe-unit" style="margin:0;" onchange="calculateGoalCalories()">
                 <option value="weeks" selected>weeks</option>
+                <option value="months">months</option>
                 <option value="days">days</option>
               </select>
             </div>
@@ -2360,7 +2361,15 @@
         return;
       }
 
-      const totalDays = tfUnit === 'weeks' ? Math.round(tfVal * 7) : Math.round(tfVal);
+      let totalDays;
+      if (tfUnit === 'months') {
+        totalDays = Math.max(1, Math.round(tfVal * 30.4375));
+      } else if (tfUnit === 'weeks') {
+        totalDays = Math.max(1, Math.round(tfVal * 7));
+      } else {
+        totalDays = Math.max(1, Math.round(tfVal));
+      }
+
       const weightDelta = targetWt - startWt;
       const totalCalDelta = weightDelta * 3500;
       const avgDailyDiff = Math.round(totalCalDelta / totalDays);
@@ -2371,9 +2380,9 @@
       const sign = avgDailyDiff > 0 ? '+' : '';
       const diffColor = avgDailyDiff > 0 ? '#22c55e' : (avgDailyDiff < 0 ? '#f87171' : '#9ca3af');
       const wtSign = weightDelta > 0 ? '+' : '';
-      const periodLabel = tfUnit === 'weeks'
-        ? `${tfVal} ${tfVal === 1 ? 'week' : 'weeks'} (${totalDays} days)`
-        : `${totalDays} ${totalDays === 1 ? 'day' : 'days'}`;
+      const unitSingular = tfUnit === 'months' ? 'month' : (tfUnit === 'weeks' ? 'week' : 'day');
+      const unitPlural = tfUnit === 'months' ? 'months' : (tfUnit === 'weeks' ? 'weeks' : 'days');
+      const periodLabel = `${tfVal} ${tfVal === 1 ? unitSingular : unitPlural} (${totalDays} days)`;
 
       resultEl.innerHTML = `
         <div style="margin-bottom:4px; color:var(--text);">
@@ -2391,22 +2400,22 @@
       applyBtn.classList.remove('hidden');
     }
 
-function applyGoalCaloriesToTarget() {
-  if (computedGoalCalories === null) return;
-  document.getElementById('target-cal').value = computedGoalCalories;
-  populateTargetInputsFromEditor();
-  saveMacroTargets();
-}
+    function applyGoalCaloriesToTarget() {
+      if (computedGoalCalories === null) return;
+      document.getElementById('target-cal').value = computedGoalCalories;
+      populateTargetInputsFromEditor();
+      saveMacroTargets();
+    }
 
-function populateTargetInputsFromEditor() {
-  const proRaw = document.getElementById('target-pro')?.value;
-  const carbRaw = document.getElementById('target-carb')?.value;
-  const fatRaw = document.getElementById('target-fat')?.value;
-  macroTargets.target_calories = computedGoalCalories;
-  if (proRaw !== '') macroTargets.target_protein = parseFloat(proRaw);
-  if (carbRaw !== '') macroTargets.target_carbs = parseFloat(carbRaw);
-  if (fatRaw !== '') macroTargets.target_fats = parseFloat(fatRaw);
-}
+    function populateTargetInputsFromEditor() {
+      const proRaw = document.getElementById('target-pro')?.value;
+      const carbRaw = document.getElementById('target-carb')?.value;
+      const fatRaw = document.getElementById('target-fat')?.value;
+      macroTargets.target_calories = computedGoalCalories;
+      if (proRaw !== '') macroTargets.target_protein = parseFloat(proRaw);
+      if (carbRaw !== '') macroTargets.target_carbs = parseFloat(carbRaw);
+      if (fatRaw !== '') macroTargets.target_fats = parseFloat(fatRaw);
+    }
     init();
   </script>
 </body>
