@@ -51,3 +51,7 @@ def serve_ui():
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon():
     return Response(status_code=204)
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}

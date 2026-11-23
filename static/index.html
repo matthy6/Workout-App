@@ -466,6 +466,8 @@
   </div>
 
   <script>
+    const WORKOUT_DRAFT_KEY = 'workout_logger_draft_v1';
+
     let exerciseCatalog = [];
     let savedTemplates = [];
     let savedFoodsCatalog = [];
@@ -508,6 +510,92 @@
     function closeSuccessModal() {
       const modal = document.getElementById('success-modal');
       modal.classList.remove('active');
+    }
+
+    // --- LocalStorage Workout Draft Persistence ---
+
+    function saveWorkoutDraft() {
+      if (editingWorkoutId) return;
+
+      const exerciseCards = Array.from(document.querySelectorAll('#exercises-container .exercise-card'));
+      const exercises = exerciseCards.map(card => {
+        const name = card.querySelector('.ex-name')?.value || '';
+        const sets = Array.from(card.querySelectorAll('.set-item')).map(item => ({
+          weight: item.querySelector('.set-lbs')?.value || '',
+          weight_unit: item.querySelector('.set-unit')?.value || 'lbs',
+          reps: item.querySelector('.set-reps')?.value || '',
+          rpe: item.querySelector('.set-rpe')?.value || '',
+          notes: item.querySelector('.set-note')?.value || ''
+        }));
+        return { name, sets };
+      });
+
+      const draft = {
+        title: document.getElementById('workout-title')?.value || '',
+        notes: document.getElementById('workout-notes')?.value || '',
+        startTime: document.getElementById('start-time')?.value || '',
+        endTime: document.getElementById('end-time')?.value || '',
+        templateId: document.getElementById('template-select')?.value || '',
+        timerActive: document.getElementById('start-btn')?.innerText.includes('Active') || false,
+        exercises
+      };
+
+      try {
+        localStorage.setItem(WORKOUT_DRAFT_KEY, JSON.stringify(draft));
+      } catch (e) {
+        console.warn('Could not save workout draft:', e);
+      }
+    }
+
+    function clearWorkoutDraft() {
+      localStorage.removeItem(WORKOUT_DRAFT_KEY);
+    }
+
+    function restoreWorkoutDraft() {
+      if (editingWorkoutId) return false;
+      const raw = localStorage.getItem(WORKOUT_DRAFT_KEY);
+      if (!raw) return false;
+
+      try {
+        const draft = JSON.parse(raw);
+        const hasContent =
+          (draft.exercises && draft.exercises.some(ex =>
+            ex.name.trim() || ex.sets.some(s => s.weight || s.reps || s.rpe || s.notes)
+          )) ||
+          (draft.notes && draft.notes.trim().length > 0) ||
+          draft.timerActive;
+
+        if (!hasContent) return false;
+
+        if (draft.title) document.getElementById('workout-title').value = draft.title;
+        if (draft.notes) document.getElementById('workout-notes').value = draft.notes;
+        if (draft.startTime) document.getElementById('start-time').value = draft.startTime;
+        if (draft.endTime) document.getElementById('end-time').value = draft.endTime;
+        if (draft.templateId) document.getElementById('template-select').value = draft.templateId;
+
+        const container = document.getElementById('exercises-container');
+        container.innerHTML = '';
+
+        if (draft.exercises && draft.exercises.length > 0) {
+          draft.exercises.forEach(ex => addExerciseBlock('exercises-container', ex.name, ex.sets, true));
+        } else {
+          addExerciseBlock('exercises-container', '', [], true);
+        }
+
+        if (draft.timerActive && draft.startTime) {
+          const btn = document.getElementById('start-btn');
+          btn.innerText = '● Active';
+          btn.style.background = '#d97706';
+          if (timerInterval) clearInterval(timerInterval);
+          timerInterval = setInterval(updateLiveTimer, 1000);
+          updateLiveTimer();
+        }
+
+        return true;
+      } catch (e) {
+        console.warn('Failed to restore workout draft:', e);
+        return false;
+      }
     }
 
     function switchTab(tabName) {
@@ -561,6 +649,7 @@
       if (timerInterval) clearInterval(timerInterval);
       timerInterval = setInterval(updateLiveTimer, 1000);
       updateLiveTimer();
+      saveWorkoutDraft();
     }
 
     function updateLiveTimer() {
@@ -845,7 +934,7 @@
       });
     }
 
-    function addSetToExercise(exerciseCard, prefill = {}) {
+    function addSetToExercise(exerciseCard, prefill = {}, skipDraftSave = false) {
       const setsList = exerciseCard.querySelector('.exercise-sets-list');
       const setItem = document.createElement('div');
       setItem.className = 'set-item';
@@ -873,19 +962,31 @@
         <input type="text" class="set-note" placeholder="Set note (optional)..." value="${noteVal}">
       `;
       setsList.appendChild(setItem);
+      if (!skipDraftSave && exerciseCard.closest('#exercises-container')) {
+        saveWorkoutDraft();
+      }
     }
 
     function removeSetFromExercise(btn) {
       const exerciseCard = btn.closest('.exercise-card');
+      const isMainLogger = Boolean(exerciseCard.closest('#exercises-container'));
       btn.closest('.set-item').remove();
       if (exerciseCard.querySelectorAll('.set-item').length === 0) {
         exerciseCard.remove();
       } else {
         renumberSets(exerciseCard);
       }
+      if (isMainLogger) saveWorkoutDraft();
     }
 
-    function addExerciseBlock(containerId = 'exercises-container', exerciseName = '', setsPrefill = []) {
+    function removeExerciseCard(btn) {
+      const card = btn.closest('.exercise-card');
+      const isMainLogger = Boolean(card.closest('#exercises-container'));
+      card.remove();
+      if (isMainLogger) saveWorkoutDraft();
+    }
+
+    function addExerciseBlock(containerId = 'exercises-container', exerciseName = '', setsPrefill = [], skipDraftSave = false) {
       const container = document.getElementById(containerId);
       const card = document.createElement('div');
       card.className = 'exercise-card';
@@ -895,7 +996,7 @@
       card.innerHTML = `
         <div class="exercise-header">
           <input type="text" class="ex-name" list="exercise-options" placeholder="Exercise name (e.g. Bench Press)..." value="${exVal}">
-          <button type="button" class="btn-del" title="Remove entire exercise" onclick="this.closest('.exercise-card').remove()">✕</button>
+          <button type="button" class="btn-del" title="Remove entire exercise" onclick="removeExerciseCard(this)">✕</button>
         </div>
         <div class="exercise-sets-list"></div>
         <button type="button" class="btn-add-set" onclick="addSetToExercise(this.closest('.exercise-card'))">+ Add Set</button>
@@ -903,9 +1004,13 @@
       container.appendChild(card);
 
       if (setsPrefill.length > 0) {
-        setsPrefill.forEach(s => addSetToExercise(card, s));
+        setsPrefill.forEach(s => addSetToExercise(card, s, true));
       } else {
-        addSetToExercise(card);
+        addSetToExercise(card, {}, true);
+      }
+
+      if (!skipDraftSave && containerId === 'exercises-container') {
+        saveWorkoutDraft();
       }
     }
 
@@ -1141,7 +1246,8 @@
       document.getElementById('exercises-container').innerHTML = '';
 
       if (tpl.sets.length === 0) {
-        addExerciseBlock('exercises-container');
+        addExerciseBlock('exercises-container', '', [], true);
+        if (notify) saveWorkoutDraft();
         return true;
       }
 
@@ -1155,8 +1261,9 @@
         }
       });
 
-      groups.forEach(g => addExerciseBlock('exercises-container', g.exercise_name, g.sets));
+      groups.forEach(g => addExerciseBlock('exercises-container', g.exercise_name, g.sets, true));
       if (notify) {
+        saveWorkoutDraft();
         showSuccessModal('Template Loaded', `Successfully loaded template "${tpl.name}".`);
       }
       return true;
@@ -1293,6 +1400,7 @@
         document.getElementById('split-panel').classList.add('hidden');
         if (userSplit.next_template_id && !editingWorkoutId) {
           applyTemplateById(userSplit.next_template_id, false);
+          clearWorkoutDraft();
         }
         showSuccessModal('Split Saved!', 'Your next scheduled workout template is loaded and ready.');
       } else {
@@ -1335,6 +1443,7 @@
         renderSplitBanner();
         if (userSplit.next_template_id) {
           applyTemplateById(userSplit.next_template_id, true);
+          clearWorkoutDraft();
         }
       }
     }
@@ -1390,7 +1499,7 @@
       document.getElementById('template-select').value = '';
       document.getElementById('workout-title').value = 'Workout Session';
       document.getElementById('exercises-container').innerHTML = '';
-      addExerciseBlock('exercises-container');
+      addExerciseBlock('exercises-container', '', [], true);
     }
 
     async function showApp(username) {
@@ -1407,11 +1516,17 @@
 
       await Promise.all([refreshExerciseOptions(), refreshTemplates(), refreshSavedFoods()]);
       await refreshSplit();
-      resetLoggerToNextWorkout();
+      if (!restoreWorkoutDraft()) {
+        resetLoggerToNextWorkout();
+      }
       loadHistory();
     }
 
     async function init() {
+      const logTab = document.getElementById('tab-log');
+      logTab.addEventListener('input', saveWorkoutDraft);
+      logTab.addEventListener('change', saveWorkoutDraft);
+
       const token = localStorage.getItem('workout_token');
       if (!token) return;
       const meRes = await fetch('/api/me', { headers: getAuthHeaders() });
@@ -1472,6 +1587,9 @@
           btn.style.background = 'var(--green)';
 
           const wasEditing = editingWorkoutId !== null;
+          if (!wasEditing) {
+            clearWorkoutDraft();
+          }
           if (data.split) {
             userSplit = data.split;
             renderSplitBanner();
@@ -1540,7 +1658,7 @@
         }
       });
 
-      groups.forEach(g => addExerciseBlock('exercises-container', g.exercise, g.sets));
+      groups.forEach(g => addExerciseBlock('exercises-container', g.exercise, g.sets, true));
       switchTab('log');
       showSuccessModal('Edit Mode', 'Workout loaded into logger for updating.');
     }
@@ -1570,7 +1688,9 @@
       const cancelBtn = document.getElementById('cancel-edit-btn');
       if (cancelBtn) cancelBtn.remove();
 
-      resetLoggerToNextWorkout();
+      if (!restoreWorkoutDraft()) {
+        resetLoggerToNextWorkout();
+      }
     }
 
     // --- Nutrition & Macro Target Functions ---
