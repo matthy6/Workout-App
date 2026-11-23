@@ -293,50 +293,6 @@
           </div>
         </div>
 
-        <div id="goal-calorie-planner" class="split-panel" style="margin-bottom:14px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-            <strong style="font-size:14px;">🎯 Goal Weight & Timeframe Planner</strong>
-          </div>
-
-          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:6px; margin-bottom:6px;">
-            <div>
-              <label for="goal-maint-cal">Maintenance (kcal/day)</label>
-              <input type="number" id="goal-maint-cal" placeholder="e.g. 2800" step="1" style="margin:0;" oninput="calculateGoalCalories()">
-            </div>
-            <div>
-              <label for="goal-start-wt">Current Weight (lbs)</label>
-              <input type="number" id="goal-start-wt" placeholder="e.g. 215" step="0.1" style="margin:0;" oninput="calculateGoalCalories()">
-            </div>
-          </div>
-
-          <div style="display:grid; grid-template-columns: 1fr 1fr 90px; gap:6px; margin-bottom:8px;">
-            <div>
-              <label for="goal-target-wt">Goal Weight (lbs)</label>
-              <input type="number" id="goal-target-wt" placeholder="e.g. 220" step="0.1" style="margin:0;" oninput="calculateGoalCalories()">
-            </div>
-            <div>
-              <label for="goal-timeframe-val">Timeframe</label>
-              <input type="number" id="goal-timeframe-val" placeholder="e.g. 8" min="1" step="1" style="margin:0;" oninput="calculateGoalCalories()">
-            </div>
-            <div>
-              <label for="goal-timeframe-unit">Unit</label>
-              <select id="goal-timeframe-unit" style="margin:0;" onchange="calculateGoalCalories()">
-                <option value="weeks" selected>weeks</option>
-                <option value="months">months</option>
-                <option value="days">days</option>
-              </select>
-            </div>
-          </div>
-
-          <div id="goal-cal-result" style="background:#1e1e1e; border:1px solid var(--border); border-radius:8px; padding:10px; font-size:13px; color:var(--muted); margin-bottom:8px;">
-            Enter maintenance calories, current weight, goal weight, and timeframe to calculate daily intake.
-          </div>
-
-          <button type="button" id="apply-goal-cal-btn" class="hidden" onclick="applyGoalCaloriesToTarget()" style="background:var(--accent); margin:0; padding:8px; font-size:13px;">
-            Use as Daily Calorie Target
-          </button>
-        </div>
-
         <div style="background:#262626; padding:10px; border-radius:8px; border:1px solid var(--border); margin-bottom:14px;">
           <h3 style="margin-bottom:8px; font-size:14px;">Log Food / Meal</h3>
 
@@ -444,10 +400,11 @@
 
       <!-- Tab 5: Body Weight Graph & Day Inspector -->
       <div id="tab-weight" class="card hidden">
-        <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:8px;">
           <div>
             <div id="wt-headline" style="font-size:26px; font-weight:800;">--</div>
             <div id="wt-delta" style="font-size:13px; color:var(--muted);">Log a weight to start tracking</div>
+            <div id="wt-cal-goal-pill" class="hidden" style="font-size:12px; font-weight:700; margin-top:4px; font-variant-numeric: tabular-nums;"></div>
           </div>
           <div id="wt-range-bar" style="display:flex; gap:4px; flex-wrap:wrap;">
             <button type="button" class="btn-icon wt-range-btn" data-range="1w" onclick="setWeightRange('1w')" style="background:var(--accent);">1W</button>
@@ -459,6 +416,48 @@
 
         <div style="margin:12px 0; background:#181818; border:1px solid var(--border); border-radius:10px; padding:8px;">
           <svg id="weight-chart-svg" viewBox="0 0 560 200" style="width:100%; height:auto; display:block;"></svg>
+        </div>
+
+        <!-- Goal Weight & Timeframe Calorie Planner -->
+        <div id="goal-calorie-planner" class="split-panel" style="margin-bottom:14px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <strong style="font-size:14px;">🎯 Goal Weight & Calorie Target</strong>
+            <button type="button" id="clear-goal-cal-btn" class="btn-icon hidden" onclick="clearSavedGoalCalories()">Clear</button>
+          </div>
+
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:6px; margin-bottom:6px;">
+            <div>
+              <label for="goal-maint-cal">Maintenance (kcal/day)</label>
+              <input type="number" id="goal-maint-cal" placeholder="e.g. 2800" step="1" style="margin:0;" oninput="calculateGoalCalories()">
+            </div>
+            <div>
+              <label for="goal-start-wt">Current Weight (lbs)</label>
+              <input type="number" id="goal-start-wt" placeholder="e.g. 215" step="0.1" style="margin:0;" oninput="calculateGoalCalories()">
+            </div>
+          </div>
+
+          <div style="display:grid; grid-template-columns: 1fr 1fr 95px; gap:6px; margin-bottom:8px;">
+            <div>
+              <label for="goal-target-wt">Goal Weight (lbs)</label>
+              <input type="number" id="goal-target-wt" placeholder="e.g. 205" step="0.1" style="margin:0;" oninput="calculateGoalCalories()">
+            </div>
+            <div>
+              <label for="goal-timeframe-val">Timeframe</label>
+              <input type="number" id="goal-timeframe-val" placeholder="e.g. 8" min="1" step="1" style="margin:0;" oninput="calculateGoalCalories()">
+            </div>
+            <div>
+              <label for="goal-timeframe-unit">Unit</label>
+              <select id="goal-timeframe-unit" style="margin:0;" onchange="calculateGoalCalories()">
+                <option value="weeks" selected>weeks</option>
+                <option value="months">months</option>
+                <option value="days">days</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="goal-cal-result" style="background:#1e1e1e; border:1px solid var(--border); border-radius:8px; padding:10px; font-size:13px; color:var(--muted);">
+            Enter maintenance calories, current weight, goal weight, and timeframe to calculate daily intake.
+          </div>
         </div>
 
         <div style="background:#262626; padding:10px; border-radius:8px; border:1px solid var(--border); margin-bottom:14px;">
@@ -511,6 +510,7 @@
 
   <script>
     const WORKOUT_DRAFT_KEY = 'workout_logger_draft_v1';
+    const GOAL_CALORIE_PLAN_KEY = 'weight_goal_calorie_plan_v1';
 
     let exerciseCatalog = [];
     let savedTemplates = [];
@@ -524,6 +524,9 @@
     let weightRange = '1w';
     let weightSeries = [];
     let selectedWeightDate = null;
+    let computedGoalCalories = null;
+    let latestInspectedCalories = null;
+    let latestInspectedDate = null;
     let timerInterval = null;
     let editingWorkoutId = null;
     let editingTemplateId = null;
@@ -1563,6 +1566,7 @@
       if (!restoreWorkoutDraft()) {
         resetLoggerToNextWorkout();
       }
+      restoreSavedGoalPlan();
       loadHistory();
     }
 
@@ -1993,6 +1997,133 @@
       }
     }
 
+    // --- Goal Weight & Timeframe Calorie Target Functions ---
+
+    function restoreSavedGoalPlan() {
+      const raw = localStorage.getItem(GOAL_CALORIE_PLAN_KEY);
+      if (!raw) return;
+      try {
+        const saved = JSON.parse(raw);
+        if (saved.maint) document.getElementById('goal-maint-cal').value = saved.maint;
+        if (saved.startWt) document.getElementById('goal-start-wt').value = saved.startWt;
+        if (saved.targetWt) document.getElementById('goal-target-wt').value = saved.targetWt;
+        if (saved.tfVal) document.getElementById('goal-timeframe-val').value = saved.tfVal;
+        if (saved.tfUnit) document.getElementById('goal-timeframe-unit').value = saved.tfUnit;
+        calculateGoalCalories(true);
+      } catch (e) {
+        console.warn('Could not restore goal plan:', e);
+      }
+    }
+
+    function clearSavedGoalCalories() {
+      localStorage.removeItem(GOAL_CALORIE_PLAN_KEY);
+      computedGoalCalories = null;
+      ['goal-maint-cal', 'goal-start-wt', 'goal-target-wt', 'goal-timeframe-val'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+      });
+      document.getElementById('clear-goal-cal-btn').classList.add('hidden');
+      document.getElementById('goal-cal-result').innerHTML =
+        'Enter maintenance calories, current weight, goal weight, and timeframe to calculate daily intake.';
+      updateWeightCalorieGoalBadge(latestInspectedCalories, latestInspectedDate);
+    }
+
+    function calculateGoalCalories(skipSave = false) {
+      const maint = parseFloat(document.getElementById('goal-maint-cal')?.value);
+      const startWt = parseFloat(document.getElementById('goal-start-wt')?.value);
+      const targetWt = parseFloat(document.getElementById('goal-target-wt')?.value);
+      const tfVal = parseFloat(document.getElementById('goal-timeframe-val')?.value);
+      const tfUnit = document.getElementById('goal-timeframe-unit')?.value || 'weeks';
+
+      const resultEl = document.getElementById('goal-cal-result');
+      const clearBtn = document.getElementById('clear-goal-cal-btn');
+
+      if (
+        isNaN(maint) || maint <= 0 ||
+        isNaN(startWt) || startWt <= 0 ||
+        isNaN(targetWt) || targetWt <= 0 ||
+        isNaN(tfVal) || tfVal <= 0
+      ) {
+        computedGoalCalories = null;
+        clearBtn.classList.add('hidden');
+        resultEl.innerHTML = 'Enter maintenance calories, current weight, goal weight, and timeframe to calculate daily intake.';
+        updateWeightCalorieGoalBadge(latestInspectedCalories, latestInspectedDate);
+        return;
+      }
+
+      let totalDays;
+      if (tfUnit === 'months') {
+        totalDays = Math.max(1, Math.round(tfVal * 30.4375));
+      } else if (tfUnit === 'weeks') {
+        totalDays = Math.max(1, Math.round(tfVal * 7));
+      } else {
+        totalDays = Math.max(1, Math.round(tfVal));
+      }
+
+      const weightDelta = targetWt - startWt;
+      const totalCalDelta = weightDelta * 3500;
+      const avgDailyDiff = Math.round(totalCalDelta / totalDays);
+      const goalDailyIntake = Math.max(0, Math.round(maint + avgDailyDiff));
+
+      computedGoalCalories = goalDailyIntake;
+      clearBtn.classList.remove('hidden');
+
+      if (!skipSave) {
+        localStorage.setItem(GOAL_CALORIE_PLAN_KEY, JSON.stringify({
+          maint, startWt, targetWt, tfVal, tfUnit
+        }));
+      }
+
+      const sign = avgDailyDiff > 0 ? '+' : '';
+      const diffColor = avgDailyDiff > 0 ? '#22c55e' : (avgDailyDiff < 0 ? '#f87171' : '#9ca3af');
+      const wtSign = weightDelta > 0 ? '+' : '';
+      const unitSingular = tfUnit === 'months' ? 'month' : (tfUnit === 'weeks' ? 'week' : 'day');
+      const unitPlural = tfUnit === 'months' ? 'months' : (tfUnit === 'weeks' ? 'weeks' : 'days');
+      const periodLabel = `${tfVal} ${tfVal === 1 ? unitSingular : unitPlural} (${totalDays} days)`;
+
+      resultEl.innerHTML = `
+        <div style="margin-bottom:4px; color:var(--text);">
+          <strong>Weight Change:</strong> ${wtSign}${Math.round(weightDelta * 10) / 10} lbs over <strong>${periodLabel}</strong>
+        </div>
+        <div style="margin-bottom:4px;">
+          <strong>Avg. Daily Difference vs. Maintenance:</strong>
+          <span style="color:${diffColor}; font-weight:700;">${sign}${avgDailyDiff} kcal/day</span>
+        </div>
+        <div style="font-size:15px; color:var(--text);">
+          <strong>Goal Caloric Intake:</strong> <span style="font-weight:800; color:#60a5fa;">${goalDailyIntake.toLocaleString()} kcal/day</span>
+        </div>
+      `;
+
+      updateWeightCalorieGoalBadge(latestInspectedCalories, latestInspectedDate);
+    }
+
+    function updateWeightCalorieGoalBadge(consumedCalories, dateStr) {
+      const pill = document.getElementById('wt-cal-goal-pill');
+      if (!pill) return;
+
+      if (computedGoalCalories === null) {
+        pill.classList.add('hidden');
+        return;
+      }
+
+      pill.classList.remove('hidden');
+
+      if (consumedCalories === null || consumedCalories === undefined) {
+        pill.style.color = '#9ca3af';
+        pill.innerText = `Goal Intake: ${computedGoalCalories.toLocaleString()} kcal/day`;
+        return;
+      }
+
+      const diff = Math.round(consumedCalories - computedGoalCalories);
+      const isOver = diff > 0;
+      const color = isOver ? '#f87171' : '#22c55e';
+      const sign = diff > 0 ? '+' : '';
+      const dayTag = dateStr ? ` (${dateStr})` : '';
+
+      pill.style.color = color;
+      pill.innerText = `${sign}${diff.toLocaleString()} kcal vs ${computedGoalCalories.toLocaleString()} goal${dayTag}`;
+    }
+
     // --- Body Weight Graph & Day Inspector Functions ---
 
     function setWeightRange(rangeKey) {
@@ -2022,6 +2153,7 @@
         headline.innerText = '--';
         deltaEl.innerText = 'No weight logs in this timeframe';
         renderWeightSvg([]);
+        updateWeightCalorieGoalBadge(latestInspectedCalories, latestInspectedDate);
         return;
       }
 
@@ -2112,6 +2244,10 @@
         : `<span style="color:var(--muted);">No weight logged</span>`;
 
       const n = day.nutrition.totals;
+      latestInspectedCalories = n.calories;
+      latestInspectedDate = day.date;
+      updateWeightCalorieGoalBadge(n.calories, day.date);
+
       const foodItemsHtml = day.nutrition.items.length
         ? `<ul style="margin:6px 0 0 16px; padding:0; font-size:13px;">${day.nutrition.items.map(i => `<li>${escapeHtml(i.food_name)} (${i.amount ?? ''} ${escapeHtml(i.unit || '')}) — ${i.calories} kcal, P: ${i.protein}g</li>`).join('')}</ul>`
         : `<div style="font-size:12px; color:var(--muted); margin-top:4px;">No meals logged</div>`;
@@ -2337,85 +2473,7 @@
         </div>
       `).join('');
     }
-    let computedGoalCalories = null;
 
-    function calculateGoalCalories() {
-      const maint = parseFloat(document.getElementById('goal-maint-cal')?.value);
-      const startWt = parseFloat(document.getElementById('goal-start-wt')?.value);
-      const targetWt = parseFloat(document.getElementById('goal-target-wt')?.value);
-      const tfVal = parseFloat(document.getElementById('goal-timeframe-val')?.value);
-      const tfUnit = document.getElementById('goal-timeframe-unit')?.value || 'weeks';
-
-      const resultEl = document.getElementById('goal-cal-result');
-      const applyBtn = document.getElementById('apply-goal-cal-btn');
-
-      if (
-        isNaN(maint) || maint <= 0 ||
-        isNaN(startWt) || startWt <= 0 ||
-        isNaN(targetWt) || targetWt <= 0 ||
-        isNaN(tfVal) || tfVal <= 0
-      ) {
-        computedGoalCalories = null;
-        applyBtn.classList.add('hidden');
-        resultEl.innerHTML = 'Enter maintenance calories, current weight, goal weight, and timeframe to calculate daily intake.';
-        return;
-      }
-
-      let totalDays;
-      if (tfUnit === 'months') {
-        totalDays = Math.max(1, Math.round(tfVal * 30.4375));
-      } else if (tfUnit === 'weeks') {
-        totalDays = Math.max(1, Math.round(tfVal * 7));
-      } else {
-        totalDays = Math.max(1, Math.round(tfVal));
-      }
-
-      const weightDelta = targetWt - startWt;
-      const totalCalDelta = weightDelta * 3500;
-      const avgDailyDiff = Math.round(totalCalDelta / totalDays);
-      const goalDailyIntake = Math.max(0, Math.round(maint + avgDailyDiff));
-
-      computedGoalCalories = goalDailyIntake;
-
-      const sign = avgDailyDiff > 0 ? '+' : '';
-      const diffColor = avgDailyDiff > 0 ? '#22c55e' : (avgDailyDiff < 0 ? '#f87171' : '#9ca3af');
-      const wtSign = weightDelta > 0 ? '+' : '';
-      const unitSingular = tfUnit === 'months' ? 'month' : (tfUnit === 'weeks' ? 'week' : 'day');
-      const unitPlural = tfUnit === 'months' ? 'months' : (tfUnit === 'weeks' ? 'weeks' : 'days');
-      const periodLabel = `${tfVal} ${tfVal === 1 ? unitSingular : unitPlural} (${totalDays} days)`;
-
-      resultEl.innerHTML = `
-        <div style="margin-bottom:4px; color:var(--text);">
-          <strong>Weight Change:</strong> ${wtSign}${Math.round(weightDelta * 10) / 10} lbs over <strong>${periodLabel}</strong>
-        </div>
-        <div style="margin-bottom:4px;">
-          <strong>Avg. Daily Difference vs. Maintenance:</strong>
-          <span style="color:${diffColor}; font-weight:700;">${sign}${avgDailyDiff} kcal/day</span>
-        </div>
-        <div style="font-size:15px; color:var(--text);">
-          <strong>Goal Caloric Intake:</strong> <span style="font-weight:800; color:#60a5fa;">${goalDailyIntake} kcal/day</span>
-        </div>
-      `;
-
-      applyBtn.classList.remove('hidden');
-    }
-
-    function applyGoalCaloriesToTarget() {
-      if (computedGoalCalories === null) return;
-      document.getElementById('target-cal').value = computedGoalCalories;
-      populateTargetInputsFromEditor();
-      saveMacroTargets();
-    }
-
-    function populateTargetInputsFromEditor() {
-      const proRaw = document.getElementById('target-pro')?.value;
-      const carbRaw = document.getElementById('target-carb')?.value;
-      const fatRaw = document.getElementById('target-fat')?.value;
-      macroTargets.target_calories = computedGoalCalories;
-      if (proRaw !== '') macroTargets.target_protein = parseFloat(proRaw);
-      if (carbRaw !== '') macroTargets.target_carbs = parseFloat(carbRaw);
-      if (fatRaw !== '') macroTargets.target_fats = parseFloat(fatRaw);
-    }
     init();
   </script>
 </body>
